@@ -43,6 +43,7 @@ func (c *Client) Run() {
 			if !ok {
 				// Server closed channel
 				log.Printf("C%d: QUIT", c.Id)
+				close(c.SendChan)
 				return
 			}
 			c.Handle(msg)

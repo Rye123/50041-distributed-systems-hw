@@ -44,17 +44,18 @@ func main() {
 	for i := 0; i < CLIENT_COUNT; i++ {
 		clientId := i
 		sendIntvMS := IntInRange(CLIENT_DELAY_FLOOR, CLIENT_DELAY_CEIL)
+		clientSendChan := make(chan lib.Message)
 		clientRecvChan := make(chan lib.Message)
-		clients = append(clients, lib.NewClient(clientId, clientRecvChan, serverRecvChan, sendIntvMS))
+		clients = append(clients, lib.NewClient(clientId, clientRecvChan, clientSendChan, sendIntvMS))
 
-		server.ConnectClient(clientId, clientRecvChan)
+		server.ConnectClient(clientId, clientRecvChan, clientSendChan)
 	}
 
 	// Start clients and server
 	go func() {
 		wg.Add(1)
 		defer wg.Done()
-		server.Run()	
+		server.Run()
 	}()
 	for _, client := range clients {
 		client := client

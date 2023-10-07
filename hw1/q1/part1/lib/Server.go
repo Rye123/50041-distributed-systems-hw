@@ -3,6 +3,7 @@ package lib
 import (
 	"log"
 	"math/rand"
+	"sync"
 )
 
 type Server struct {
@@ -11,12 +12,13 @@ type Server struct {
 	SendChans  map[int](chan<- Message) // Client receive channels, used for broadcast
 	DropChance float32                  // Chance of server dropping a message
 	QuitChan   <-chan bool
+	clientWg   sync.WaitGroup
 }
 
 // Initialise a new server.
 func NewServer(recvChan chan Message, dropChance float32, quitChan <-chan bool) Server {
 	log.Printf("Server: Drop Chance: %v", dropChance)
-	return Server{-1, recvChan, make(map[int](chan<- Message)), dropChance, quitChan}
+	return Server{-1, recvChan, make(map[int](chan<- Message)), dropChance, quitChan, sync.WaitGroup{}}
 }
 
 // Sends a given message to the given clientId.
@@ -45,8 +47,24 @@ func (s *Server) Handle(msg Message) {
 }
 
 // Connect a given client
-func (s *Server) ConnectClient(clientId int, serverToClientChan chan<- Message) {
+func (s *Server) ConnectClient(clientId int, serverToClientChan chan<- Message, clientToServerChan <-chan Message) {
 	s.SendChans[clientId] = serverToClientChan
+
+	// Set goroutine to forward messages from clientToServerChan to joint channel
+	go func(clientSendChan <-chan Message) {
+		s.clientWg.Add(1)
+		defer s.clientWg.Done()
+
+		for {
+			msg, ok := <-clientSendChan
+			if !ok {
+				return
+			}
+
+			// Pass message to actual centralised channel
+			s.RecvChan <- msg
+		}
+	}(clientToServerChan)
 }
 
 // Runs the server.
@@ -64,7 +82,8 @@ func (s *Server) Run() {
 				close(s.SendChans[clientId])
 			}
 
-			// Close receiving channel
+			// Close receiving channel only after all clientToServer channels have closed
+			s.clientWg.Wait()
 			close(s.RecvChan)
 			return
 		}
