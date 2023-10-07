@@ -69,22 +69,27 @@ func (s *Server) ConnectClient(clientId int, serverToClientChan chan<- Message, 
 
 // Runs the server.
 func (s *Server) Run() {
+	defer func() {
+		log.Println("Server: Quitting.")
+
+		// Close all sending channels
+		for clientId := range s.SendChans {
+			close(s.SendChans[clientId])
+		}
+
+		// Close receiving channel only after all clientToServer channels have closed
+		s.clientWg.Wait()
+		close(s.RecvChan)
+
+		log.Println("Server: QUIT SUCCESS")
+	}()
+
 	for {
 		select {
 		case msg := <-s.RecvChan:
 			// Received a message
 			s.Handle(msg)
 		case <-s.QuitChan:
-			log.Println("Server: QUIT")
-
-			// Close all sending channels
-			for clientId := range s.SendChans {
-				close(s.SendChans[clientId])
-			}
-
-			// Close receiving channel only after all clientToServer channels have closed
-			s.clientWg.Wait()
-			close(s.RecvChan)
 			return
 		}
 	}

@@ -35,15 +35,17 @@ func (c *Client) Handle(msg Message) {
 // Runs the client
 func (c *Client) Run() {
 	sendTicker := time.NewTicker(c.SendIntv)
-	defer sendTicker.Stop()
+	defer func() {
+		sendTicker.Stop()
+		log.Printf("C%d: QUIT", c.Id)
+		close(c.SendChan)
+	}()
 
 	for {
 		select {
 		case msg, ok := <-c.RecvChan:
 			if !ok {
 				// Server closed channel
-				log.Printf("C%d: QUIT", c.Id)
-				close(c.SendChan)
 				return
 			}
 			c.Handle(msg)
