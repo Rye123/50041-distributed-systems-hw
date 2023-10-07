@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-const CLIENT_COUNT = 20
+const CLIENT_COUNT = 3
 const SERVER_DROP_CHANCE = 0.5
 
 // To set the random delay of client sending messages (in milliseconds)
@@ -35,32 +35,26 @@ func NewClient(clientId int, recvChan <-chan Message, sendChan chan<- Message, s
 
 func (c *Client) Run() {
 	quit := make(chan bool)
+	ticker := time.NewTicker(c.SendIntv)
+	defer ticker.Stop()
 	
-	// Initialise separate sending goroutine
-	go func(quitChan chan bool) {
-		for {
-			select {
-			case <-quit:
-				return
-			case <-time.After(c.SendIntv):
-				data := fmt.Sprintf("C%d-MSG%d", c.Id, c.Counter)
-				c.Counter++
-				c.SendChan <- Message{c.Id, data}
-				log.Printf("C%d: SEND to SERVER  : %v\n", c.Id, data)
-			}
-		}
-	}(quit)
-
 	// Listen for messages
 	for {
-		msg, ok := <-c.RecvChan
-		if !ok {
-			// server closed channel
-			log.Printf("C%d: QUIT\n", c.Id)
-			quit <- true
-			return
+		select {
+		case msg, ok := <-c.RecvChan:
+			if !ok {
+				// server closed channel
+				log.Printf("C%d: QUIT\n", c.Id)
+				quit <- true
+				return
+			}
+			log.Printf("C%d: RECV from SERVER: %v\n", c.Id, msg.Data)
+		case <-ticker.C:
+			data := fmt.Sprintf("C%d-MSG%d", c.Id, c.Counter)
+			c.Counter++
+			c.SendChan <- Message{c.Id, data}
+			log.Printf("C%d: SEND to SERVER  : %v\n", c.Id, data)
 		}
-		log.Printf("C%d: RECV from SERVER: %v\n", c.Id, msg.Data)
 	}
 }
 
