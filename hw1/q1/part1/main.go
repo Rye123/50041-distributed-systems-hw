@@ -7,9 +7,14 @@ import (
 	"time"
 )
 
-const CLIENT_COUNT = 2
+const CLIENT_COUNT = 20
 const SERVER_DROP_CHANCE = 0.5
 
+// To set the random delay of client sending messages (in milliseconds)
+const CLIENT_DELAY_FLOOR = 500
+const CLIENT_DELAY_CEIL  = 10000
+
+// Message sent between server and client
 type Message struct {
 	SrcId int  // Source ID of message
 	Data string // Message data
@@ -29,21 +34,33 @@ func NewClient(clientId int, recvChan <-chan Message, sendChan chan<- Message, s
 }
 
 func (c *Client) Run() {
-	for {
-		select {
-		case msg, ok := <-c.RecvChan:
-			if !ok {
-				// server closed channel
-				log.Printf("C%d: QUIT\n", c.Id)
+	quit := make(chan bool)
+	
+	// Initialise separate sending goroutine
+	go func(quitChan chan bool) {
+		for {
+			select {
+			case <-quit:
 				return
+			case <-time.After(c.SendIntv):
+				data := fmt.Sprintf("C%d-MSG%d", c.Id, c.Counter)
+				c.Counter++
+				c.SendChan <- Message{c.Id, data}
+				log.Printf("C%d: SEND to SERVER  : %v\n", c.Id, data)
 			}
-			log.Printf("C%d: RECV from SERVER: %v\n", c.Id, msg.Data)
-		case <-time.After(c.SendIntv):
-			data := fmt.Sprintf("C%d-MSG%d", c.Id, c.Counter)
-			c.Counter++
-			c.SendChan <- Message{c.Id, data}
-			log.Printf("C%d: SEND to SERVER  : %v\n", c.Id, data)
 		}
+	}(quit)
+
+	// Listen for messages
+	for {
+		msg, ok := <-c.RecvChan
+		if !ok {
+			// server closed channel
+			log.Printf("C%d: QUIT\n", c.Id)
+			quit <- true
+			return
+		}
+		log.Printf("C%d: RECV from SERVER: %v\n", c.Id, msg.Data)
 	}
 }
 
@@ -73,6 +90,7 @@ func (s *Server) Run() {
 
 			if rand.Float32() <  s.DropChance {
 				// drop message
+				log.Printf("Server: DROP message: %v", msg.Data)
 				continue
 			}
 
@@ -100,6 +118,12 @@ func (s *Server) Run() {
 
 // Returns a random integer in the range [floor, ceil].
 func IntInRange(floor int, ceil int) int {
+	if floor == ceil {
+		return floor
+	}
+	if floor > ceil {
+		panic("IntInRange floor > ceil")
+	}
 	return rand.Intn(ceil - floor) + floor
 }
 
@@ -116,7 +140,7 @@ func main() {
 
 	for i := 0; i < CLIENT_COUNT; i++ {
 		clientId := i
-		delay := IntInRange(500, 5000)
+		delay := IntInRange(CLIENT_DELAY_FLOOR, CLIENT_DELAY_CEIL)
 		clientSendIntv := time.Millisecond * time.Duration(delay)
 		clientRecvChan := make(chan Message)
 		clients = append(clients, NewClient(clientId, clientRecvChan, serverRecvChan, clientSendIntv))
