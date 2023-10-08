@@ -9,6 +9,7 @@ import (
 
 const CLIENT_COUNT = 20
 const SERVER_DROP_CHANCE = 0.5
+const CAUSALITY_VIOLATION_CHANCE = 0.5
 
 // To set the random delay of client sending messages (in milliseconds)
 const CLIENT_DELAY_FLOOR = 1000
@@ -53,7 +54,7 @@ func main() {
 		sendIntvMS := IntInRange(CLIENT_DELAY_FLOOR, CLIENT_DELAY_CEIL)
 		clientSendChan := make(chan lib.Message)
 		clientRecvChan := make(chan lib.Message)
-		clients = append(clients, lib.NewClient(clientId, nodeIds, clientRecvChan, clientSendChan, sendIntvMS))
+		clients = append(clients, lib.NewClient(clientId, nodeIds, clientRecvChan, clientSendChan, sendIntvMS, CAUSALITY_VIOLATION_CHANCE))
 
 		server.ConnectClient(clientId, clientRecvChan, clientSendChan)
 	}

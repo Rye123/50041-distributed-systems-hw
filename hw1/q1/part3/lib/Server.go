@@ -13,7 +13,7 @@ type Server struct {
 	SendChans  map[int](chan<- Message) // Client receive channels, used for broadcast
 	DropChance float32                  // Chance of server dropping a message
 	QuitChan   <-chan bool
-	clientWg sync.WaitGroup
+	clientWg   sync.WaitGroup
 }
 
 // Initialise a new server.
@@ -28,7 +28,7 @@ func (s *Server) Send(clientId int, msg Message) {
 	s.Clock = s.Clock.Increment(s.Id, 1)
 
 	// Ensure timestamp of message is set
-	msg.Timestamp = s.Clock
+	msg.Timestamp = s.Clock.Clone()
 
 	// Send the message.
 	s.SendChans[clientId] <- msg
@@ -39,7 +39,7 @@ func (s *Server) Handle(msg Message) {
 	log.Printf("Server: RECV from C%d: %v", msg.SrcId, msg.Data)
 
 	// Check for potential causality violation
-	if s.Clock.Compare(msg.Timestamp) > 1 {
+	if s.Clock.Compare(msg.Timestamp) == 1 {
 		// local clock > received clock
 		log.Printf("Server: Dropping msg from C%d (%v) due to potential causality violation", msg.SrcId, msg.Data)
 		return
