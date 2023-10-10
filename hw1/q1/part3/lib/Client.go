@@ -98,7 +98,7 @@ func (c *Client) Run() {
 	sendTicker := time.NewTicker(c.SendIntv)
 	defer func() {
 		sendTicker.Stop()
-		log.Printf("C%d: Received Message Order: %v", c.Id, c.ReportMessages())
+		log.Printf("C%d: Total Order of Received Messages: %v", c.Id, c.ReportMessages())
 		close(c.SendChan)
 	}()
 
