@@ -6,7 +6,7 @@ import (
 	"math/rand"
 	"time"
 )
-const BUFFER_MAX = 250
+const BUFFER_MAX = 500
 
 type msgType string
 
@@ -143,7 +143,7 @@ func (node *Node) HandleControl(quit chan bool) {
 				panic(fmt.Sprintf("N%d: Received MSG_TYPE_SYNC on ControlChan", node.Id))
 			case MSG_TYPE_ELECTION_START:
 				// If another node is starting an election, reject if ID lower
-				log.Printf("N%d: Received ELECTION_START from N%d.", node.Id, msg.SrcId)
+				// log.Printf("N%d: Received ELECTION_START from N%d.", node.Id, msg.SrcId)
 				if msg.SrcId < node.Id {
 					node.send(
 						MSG_TYPE_ELECTION_VETO,
@@ -155,14 +155,14 @@ func (node *Node) HandleControl(quit chan bool) {
 				// If we receive a veto:
 				// pass it along to the StartElection if we have an ongoing election
 				if msg.Data == node.ongoingElectionId {
-					log.Printf("N%d: Received ELECTION_VETO from N%d.", node.Id, msg.SrcId)
+					// log.Printf("N%d: Received ELECTION_VETO from N%d.", node.Id, msg.SrcId)
 
 					// Do this in a separate goroutine, since we don't want to block the controlchan listening
 					go func() { node.vetoChan <- msg }()
 				}
 			case MSG_TYPE_ELECTION_WIN:
 				// If another node declares it has won...
-				log.Printf("N%d: Received ELECTION_WIN from N%d.", node.Id, msg.SrcId)
+				// log.Printf("N%d: Received ELECTION_WIN from N%d.", node.Id, msg.SrcId)
 				if msg.SrcId < node.Id {
 					// DEMAND A RECOUNT
 					node.StartElection()
@@ -298,7 +298,7 @@ func (node *Node) send(mType msgType, dstEndpoint NodeEndpoint, data string) {
 	}
 
 	msg := Message{mType, node.Id, dstEndpoint.Id, data}
-	log.Printf("N%d: Sent %s to N%d: %s", msg.SrcId, mType, msg.DstId, data)
+	// log.Printf("N%d: Sent %s to N%d: %s", msg.SrcId, mType, msg.DstId, data)
 
 	if mType == MSG_TYPE_SYNC {
 		dstEndpoint.DataChan <- msg
@@ -311,6 +311,7 @@ func (node *Node) send(mType msgType, dstEndpoint NodeEndpoint, data string) {
 // To simulate a node going down in a network, we simply stop
 // sending messages.
 func (node *Node) Kill() {
+	log.Printf("N%d: Killed.", node.Id)
 	node.CoordinatorId = -1
 	node.IsAlive = false
 }

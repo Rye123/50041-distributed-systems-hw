@@ -37,6 +37,10 @@ func (o *Orchestrator) Initiate() {
 func (o *Orchestrator) GetCoordinatorIds() map[NodeId]NodeId {
 	coordIds := make(map[NodeId]NodeId)
 	for nodeId := range(o.Nodes) {
+		// Check first if the node is actually alive, since we set the coordinator ID of dead nodes to be -1
+		if !o.Nodes[nodeId].IsAlive {
+			continue
+		}
 		coordIds[nodeId] = o.Nodes[nodeId].CoordinatorId
 	}
 	return coordIds
@@ -44,6 +48,13 @@ func (o *Orchestrator) GetCoordinatorIds() map[NodeId]NodeId {
 
 func (o *Orchestrator) KillNode(id NodeId) {
 	o.Nodes[id].Kill()
+}
+
+func (o *Orchestrator) RestartNode(id NodeId) {
+	if o.Nodes[id].IsAlive {
+		panic("Tried to start an alive node")
+	}
+	o.Nodes[id].Restart()
 }
 
 func (o *Orchestrator) HasOngoingElection() bool {
