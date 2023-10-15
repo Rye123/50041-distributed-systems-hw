@@ -55,6 +55,24 @@ func (o *Orchestrator) HasOngoingElection() bool {
 	return false
 }
 
+func (o *Orchestrator) BlockTillElectionStart(maxPolls int, pollTick time.Duration) error {
+	polls := 0
+	for polls < maxPolls {
+		if !o.HasOngoingElection() {
+			time.Sleep(pollTick)
+			polls++
+		} else {
+			break
+		}
+	}
+
+	if polls == maxPolls {
+		return errors.New(fmt.Sprintf("Election not settled after %d polls.", maxPolls))
+	}
+
+	return nil
+}
+
 func (o *Orchestrator) BlockTillElectionDone(maxPolls int, pollTick time.Duration) error {
 	polls := 0
 	for polls < maxPolls {
@@ -75,24 +93,27 @@ func (o *Orchestrator) BlockTillElectionDone(maxPolls int, pollTick time.Duratio
 
 // Returns the coordinator ID after election has settled.
 // Blocks if election has not been settled, gives error after 5 seconds.
-func (o *Orchestrator) GetCoordinatorId() (NodeId, error) {
-	err := o.BlockTillElectionDone(5, time.Second)
+func (o *Orchestrator) GetCoordinatorId(maxPolls int, pollTick time.Duration) (NodeId, error) {
+	err := o.BlockTillElectionDone(maxPolls, pollTick)
 	if err != nil {
 		return -1, errors.New("Election not settled.")
 	}
 	
 	// Ensure coordId is the same
 	coordId := NodeId(-1)
-	for _, nodeId := range(o.GetCoordinatorIds()) {
+	for i, nodeId := range(o.GetCoordinatorIds()) {
 		if nodeId != coordId && coordId != -1 {
-			return -1, errors.New("Election settled, but no single coordinatorId.")
+			return -1, errors.New(fmt.Sprintf("Election settled, but no single coordinatorId (Has C%d (from N%d) and N%d.", nodeId, i, coordId))
 		} else {
 			coordId = nodeId
 		}
 	}
 
-	if coordId == -1 {
-		coordId, _ = o.GetCoordinatorId()
-	}
 	return coordId, nil
+}
+
+func (o *Orchestrator) Exit() {
+	for nodeId := range(o.Nodes) {
+		o.Nodes[nodeId].Exit()
+	}
 }

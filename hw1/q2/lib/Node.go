@@ -6,7 +6,7 @@ import (
 	"math/rand"
 	"time"
 )
-const BUFFER_MAX = 25
+const BUFFER_MAX = 250
 
 type msgType string
 
@@ -128,12 +128,12 @@ func (node *Node) HandleControl(quit chan bool) {
 			}
 
 			if msg.DstId != node.Id {
-				panic(fmt.Sprintf("N%d: Received message bound for N%d.", msg.DstId))
+				panic(fmt.Sprintf("N%d: Received message bound for N%d.", node.Id, msg.DstId))
 			}
 
 			// Drop message if dead
 			if !node.IsAlive {
-				log.Printf("N%d: Dropped incoming message from %d, node is dead.", node.Id, msg.SrcId)
+				// log.Printf("N%d: Dropped incoming message from %d, node is dead.", node.Id, msg.SrcId)
 				continue
 			}
 
@@ -156,7 +156,9 @@ func (node *Node) HandleControl(quit chan bool) {
 				// pass it along to the StartElection if we have an ongoing election
 				if msg.Data == node.ongoingElectionId {
 					log.Printf("N%d: Received ELECTION_VETO from N%d.", node.Id, msg.SrcId)
-					node.vetoChan <- msg
+
+					// Do this in a separate goroutine, since we don't want to block the controlchan listening
+					go func() { node.vetoChan <- msg }()
 				}
 			case MSG_TYPE_ELECTION_WIN:
 				// If another node declares it has won...
