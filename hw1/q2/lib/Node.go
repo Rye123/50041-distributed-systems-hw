@@ -6,270 +6,327 @@ import (
 	"math/rand"
 	"time"
 )
-type msgType int
+const BUFFER_MAX = 25
+
+type msgType string
+
 const (
-	MSG_TYPE_SYNC msgType = iota // Message sent by coordinator, containing data
-	MSG_TYPE_ELECTION_START // Message sent by a node to start an election
-	MSG_TYPE_ELECTION_VETO // Message sent by a higher ID node to reject an election
-	MSG_TYPE_ELECTION_WIN // Message sent by a node to declare itself as coordinator
+	MSG_TYPE_SYNC           msgType = "SYNC"           // Sent by coordinator, containing data
+	MSG_TYPE_ELECTION_START         = "ELECTION_START" // Sent by a node to start an election
+	MSG_TYPE_ELECTION_VETO          = "ELECTION_VETO"  // Sent by a higher ID node to reject an election
+	MSG_TYPE_ELECTION_WIN           = "ELECTION_WIN"   // Sent by a node to declare self as coordinator
 )
-// If message involves an election, message will have the election ID stored in the data
+
+// A standard message sent between nodes.
+// The `Data` field contains either the data to be exchanged in a `MSG_TYPE_SYNC` message,
+// or the election ID if the message type is about an election
+type Message struct {
+	Type  msgType
+	SrcId NodeId
+	DstId NodeId
+	Data  string
+}
 
 type NodeId int
 
-type Message struct {
-	Type msgType
-	SrcId NodeId
-	DstId NodeId
-	data string
+// Endpoints for a node
+// This is abstracted from the node itself, to ensure we don't accidentally
+// share other data between goroutines. This is the only thing that
+// other nodes have access to -- forcing us to pass all data through these
+// channels.
+type NodeEndpoint struct {
+	Id          NodeId
+	ControlChan chan Message // Channel for control messages
+	DataChan    chan Message // Channel for actual data
 }
 
+// A node in the system.
 type Node struct {
-	Id NodeId
-	CoordinatorId NodeId
-	nodeMap map[NodeId]Node // Maps a node ID to a Node
-	Data string
-	SendInterval time.Duration // How often to send data
-	Timeout time.Duration
-	ControlChan chan Message
-	DataChan chan Message
-	vetoChan chan Message // Internal channel to monitor for vetoes
-	ongoingElection bool // Whether or not this node has started an election
-	IsAlive bool
-	quitChans [](chan bool)
+	Id, CoordinatorId NodeId
+	Data              string                  // The data structure to be synchronised.
+	IsAlive           bool                    // Simulated liveness to simulate a fault.
+	Endpoint          NodeEndpoint            // This node's endpoint
+	endpoints           map[NodeId]NodeEndpoint // Maps a node ID to their endpoint
+	sendIntv          time.Duration           // How often data is to be sent from the coordinator
+	timeout           time.Duration           // Estimated RTT for messages
+	vetoChan          chan Message            // Internal channel to monitor for vetoes during an election
+	ongoingElectionId string                    // Election ID of current election ("" if no election)
+	quitChans         [](chan bool)           // Internal channels to kill goroutines
+	disableElection    bool                    // Internal control to disable this ndoe starting elections
 }
 
-func NewNode(id NodeId, sendInterval, timeout time.Duration) *Node {
-	return &Node{id, -1, make(map[NodeId]Node, 0), "", sendInterval, timeout,  make(chan Message), make(chan Message), make(chan Message), false, true, make([](chan bool), 0)}
+// Creates a new node.
+func NewNode(id NodeId, sendInterval, timeout time.Duration, disableElection bool) *Node {
+	return &Node{
+		id, -1, "", true,
+		NodeEndpoint{id, make(chan Message, BUFFER_MAX), make(chan Message, BUFFER_MAX)},
+		make(map[NodeId]NodeEndpoint, 0),
+		sendInterval, timeout,
+		make(chan Message),
+		"", make([](chan bool), 0),
+		disableElection,
+	}
 }
 
-func (node *Node) Initialise(nodeLs []Node) {
-	for _, other := range(nodeLs) {
+// Given a list of endpoints of nodes, initialise the Node.
+func (node *Node) Initialise(endpoints []NodeEndpoint) {
+	for _, other := range(endpoints) {
 		if other.Id == node.Id {
 			continue
 		}
-
-		node.nodeMap[other.Id] = other
+		node.endpoints[other.Id] = other
 	}
 
 	node.quitChans = append(node.quitChans, make(chan bool), make(chan bool), make(chan bool))
 
-	go node.SyncData(node.quitChans[0])
-	go node.HandleControl(node.quitChans[1])
-	go node.HandleData(node.quitChans[2])
+	// Start up goroutines to handle necessary incoming messages
+	go node.HandleControl(node.quitChans[0])
+	go node.HandleData(node.quitChans[1])
+	go node.SyncData(node.quitChans[2])
 
-	// Start election upon initialisation
-	node.StartElection()
+	node.StartElection() // Start election upon initialisation
 }
 
-func (node *Node) Send(mType msgType, dstNode Node, data string) {
-	if !node.IsAlive {
-		return
-	}
-
-	msg := Message{mType, node.Id, dstNode.Id, data}
-	log.Printf("N%d to N%d: %s", node.Id, dstNode.Id, data)
-	
-	dst := node.nodeMap[msg.DstId]
-	if msg.Type == MSG_TYPE_SYNC {
-		dst.DataChan <- msg
-	} else {
-		dst.ControlChan <- msg
-	}
-}
-
+// Coordinator function to send data, if this node is the coordinator.
 func (node *Node) SyncData(quit chan bool) {
 	for {
 		select {
-		case <-time.After(node.SendInterval):
+		case <-time.After(node.sendIntv):
+			// Don't send if you're not the coordinator
 			if node.Id != node.CoordinatorId {
 				continue
 			}
-			for nodeId := range(node.nodeMap) {
-				node.Send(MSG_TYPE_SYNC, node.nodeMap[nodeId], node.Data)
+
+			// Don't broadcast if you're dead
+			if !node.IsAlive {
+				continue
 			}
-			
-			
+
+			// Broadcast this node's data
+			for nodeId := range node.endpoints {
+				node.send(MSG_TYPE_SYNC, node.endpoints[nodeId], node.Data)
+			}
+		case <-quit:
+			log.Printf("N%d: Shutting down SyncData.", node.Id)
+			return
 		}
 	}
 }
 
+// Handle control messages
 func (node *Node) HandleControl(quit chan bool) {
 	for {
-		if !node.IsAlive {
-			continue
-		}
-		
-		// Control message: Either an ELECTION_START, ELECTION_VETO or ELECTION_WIN		
-		msg, ok := <-node.ControlChan
-
-		if !ok {
-			log.Printf("Error: Closure of control channel by node %d", node.Id)
-		}
-
-		switch msg.Type {
-		case MSG_TYPE_ELECTION_VETO:
-			// If veto, then it's handled by the goroutines in StartElection.
-			log.Printf("N%d: Received ELECTION_VETO from %d.", node.Id, msg.SrcId)
-			node.vetoChan <- msg
-		case MSG_TYPE_ELECTION_START:
-			// If another node is starting an election, REJECT if id lower
-			// Note that we use the same data in the message (i.e. the election ID)
-			log.Printf("N%d: Received ELECTION_START from %d.", node.Id, msg.SrcId)
-			if msg.SrcId < node.Id {
-				node.Send(MSG_TYPE_ELECTION_VETO, node.nodeMap[msg.SrcId], msg.data)
-			}
-		case MSG_TYPE_ELECTION_WIN:
-			// If another node declares it has won, start an election if lower
-			// Otherwise accept
-			log.Printf("N%d: Received ELECTION_WIN from %d.", node.Id, msg.SrcId)
-			if msg.SrcId < node.Id {
-				node.StartElection()
-			} else {
-				node.CoordinatorId = msg.SrcId
-			}
-		}
-	}
-	
-}
-
-func (node *Node) HandleData(quit chan bool) {
-	/**
-	  We expect a data message at least every (node.SendInterval + node.Timeout/2) seconds.
-	  - node.Timeout is the simulated time taken to get a response after sending a request (i.e. RTT)
-	  - Hence, RTT/2 gives the amount of time a message SHOULD take to come from the server
-	*/
-	for {
-		if !node.IsAlive {
-			continue
-		}
-		
 		select {
-		case msg, ok := <-node.DataChan:
-			// Data message
+		case msg, ok := <-node.Endpoint.ControlChan:
 			if !ok {
-				log.Printf("Error: Closure of data channel by node %d", node.Id)
+				log.Printf("N%d: ControlChan closed, shutting down HandleControl", node.Id)
+				return
 			}
-			if msg.SrcId > node.Id {
-				// i don't take orders from you!
-				node.StartElection()
+
+			if msg.SrcId == node.Id {
+				panic(fmt.Sprintf("N%d: Received a message from itself", node.Id))
+			}
+
+			if msg.DstId != node.Id {
+				panic(fmt.Sprintf("N%d: Received message bound for N%d.", msg.DstId))
+			}
+
+			// Drop message if dead
+			if !node.IsAlive {
+				log.Printf("N%d: Dropped incoming message from %d, node is dead.", node.Id, msg.SrcId)
 				continue
 			}
-			node.Data = msg.data
-		case <-time.After(node.SendInterval + node.Timeout):
-			if node.Id == node.CoordinatorId {
-				// I'm the coordinator, why would i time out???
-				continue
+
+			// Handle message
+			switch msg.Type {
+			case MSG_TYPE_SYNC:
+				panic(fmt.Sprintf("N%d: Received MSG_TYPE_SYNC on ControlChan", node.Id))
+			case MSG_TYPE_ELECTION_START:
+				// If another node is starting an election, reject if ID lower
+				log.Printf("N%d: Received ELECTION_START from N%d.", node.Id, msg.SrcId)
+				if msg.SrcId < node.Id {
+					node.send(
+						MSG_TYPE_ELECTION_VETO,
+						node.endpoints[msg.SrcId],
+						msg.Data, // Note we use the same election ID.
+					)
+				}
+			case MSG_TYPE_ELECTION_VETO:
+				// If we receive a veto:
+				// pass it along to the StartElection if we have an ongoing election
+				if msg.Data == node.ongoingElectionId {
+					log.Printf("N%d: Received ELECTION_VETO from N%d.", node.Id, msg.SrcId)
+					node.vetoChan <- msg
+				}
+			case MSG_TYPE_ELECTION_WIN:
+				// If another node declares it has won...
+				log.Printf("N%d: Received ELECTION_WIN from N%d.", node.Id, msg.SrcId)
+				if msg.SrcId < node.Id {
+					// DEMAND A RECOUNT
+					node.StartElection()
+				} else {
+					// ok you win
+					node.CoordinatorId = msg.SrcId
+				}
 			}
-			// Assume coordinator is down
-			log.Printf("N%d: Coordinator is down.", node.Id)
-			node.StartElection()
+		case <-quit:
+			log.Printf("N%d: Shutting down HandleControl.", node.Id)
+			return
 		}
 	}
 }
 
-func (node *Node) UpdateData(data string) {
-	if node.Id != node.CoordinatorId {
+// Handle data messages
+func (node *Node) HandleData(quit chan bool) {
+	// We expect a data message AT LEAST every (node.sendIntv + node.timeout/2) seconds.
+	// node.sendIntv is the interval the coordinator should send a message
+	// node.timeout is the (simulated) time taken to get a response after sending a request, i.e. RTT
+	// Hence, RTT/2 gives the expected time taken for a msg to reach this node from the coordinator
+	// Hence, (node.sendIntv + RTT/2) is the MAX time taken for a msg from the coordinator to come.
+
+	for {
+		select {
+		case msg, ok := <-node.Endpoint.DataChan:
+			if !ok {
+				log.Printf("N%d: DataChan closed, shutting down HandleData", node.Id)
+				return
+			}
+
+			// Drop message if dead
+			if !node.IsAlive {
+				continue
+			}
+
+			if msg.SrcId == node.Id {
+				panic(fmt.Sprintf("N%d: Received a message from itself", node.Id))
+			} else if msg.SrcId < node.Id {
+				// I don't take orders from you!!!
+				node.StartElection()
+				continue
+			}
+
+			log.Printf("N%d: Received SYNC from N%d: %v", node.Id, msg.SrcId, msg.Data)
+			node.Data = msg.Data
+		case <-time.After(node.sendIntv + (node.timeout / 2)):
+			if node.disableElection || node.Id == node.CoordinatorId || !node.IsAlive {
+				continue
+			}
+
+			// Assume coordinator is down.
+			log.Printf("N%d: Detected coordinator is down.", node.Id)
+			node.StartElection()
+		case <-quit:
+			log.Printf("N%d: Shutting down HandleData", node.Id)
+			return
+		}
+	}
+}
+
+// Initiate an election
+func (node *Node) StartElection() {
+	if node.ongoingElectionId != "" {
 		return
+	}
+	if node.disableElection {
+		return
+	}
+
+	go func() {
+		node.ongoingElectionId = fmt.Sprintf("EL%d", rand.Int()) // Random election ID
+		log.Printf("N%d: Starting election with ID: %v", node.Id, node.ongoingElectionId)
+
+		defer func() { node.ongoingElectionId = "" }()
+		
+		veto := false
+
+		for nodeId := range(node.endpoints) {
+			nodeId := nodeId
+			if nodeId <= node.Id {
+				continue
+			}
+			node.send(MSG_TYPE_ELECTION_START, node.endpoints[nodeId], node.ongoingElectionId)
+		}
+
+		// Watch for timeout or vetoes
+		select {
+		case <-node.vetoChan:
+			// Veto from ANY higher node considered as veto
+			veto = true
+		case <-time.After(node.timeout):
+			// No responses received from any node
+		}
+
+		// Announcement Stage
+		if veto {
+			log.Printf("N%d: Lost election %s.", node.Id, node.ongoingElectionId)
+		} else {
+			log.Printf("N%d: Won election %s.", node.Id, node.ongoingElectionId)
+
+			node.CoordinatorId = node.Id
+			for nodeId := range(node.endpoints) {
+				if nodeId >= node.Id {
+					continue
+				}
+				node.send(
+					MSG_TYPE_ELECTION_WIN,
+					node.endpoints[nodeId],
+					node.ongoingElectionId,
+				)
+			}
+		}
+	}()
+}
+
+// Manual update of data
+func (node *Node) PushUpdate(data string) {
+	if node.Id != node.CoordinatorId {
+		panic(fmt.Sprintf("PushUpdate error: N%d is not the coordinator.", node.Id))
 	}
 
 	node.Data = data
 }
 
-func (node *Node) StartElection() {
-	if node.ongoingElection {
-		log.Printf("N%d: Cannot start election, ongoing one.", node.Id)
-		return
-	}
-	log.Printf("N%d: Starting election.", node.Id)
-	node.ongoingElection = true
-	
-	// Generate random election ID
-	elId := fmt.Sprintf("EL%d", rand.Int())
-	
-	// Start goroutines asking higher IDs
-	completedChan := make(chan bool)
-	stopReqChans := make([](chan bool), 0)
-	for nodeId := range(node.nodeMap) {
-		if nodeId <= node.Id {
-			continue
-		}
-
-		nodeId := nodeId
-		stopReqChan := make(chan bool)
-		stopReqChans = append(stopReqChans, stopReqChan)
-		go func(dst Node, stop chan bool) {
-			// Send the request
-			node.Send(MSG_TYPE_ELECTION_START, dst, elId)
-
-			// Watch for either: timeout, or stopReqChan
-			select {
-			case <-stop: // signalled to stop by a veto
-				break
-			case <- time.After(node.Timeout):
-				break
-			}
-			completedChan <- true
-			
-		}(node.nodeMap[nodeId], stopReqChan)
-	}
-
-	// If we receive any vetoes MATCHING THE ELECTION ID, call all existing goroutines to stop
-	veto := false
-	completed := 0
-	for completed < len(stopReqChans) {
-		select {
-		case msg := <-node.vetoChan:
-			// If not match, veto must've been from an older election
-			// This is because we only have one election at a time
-			if msg.data != elId {
-				continue
-			}
-
-			// Otherwise, it's a veto, and we stop all the others
-			veto = true
-
-			for _, stopReqChan := range(stopReqChans) {
-				stopReqChan <- true
-			}
-			
-		case <-completedChan: // we expect a total of len(stopReqChans)
-			completed += 1
-		}
-	}
-
-	// Announcement Stage
-	log.Printf("N%d: Reached announcement stage.", node.Id)
-	if veto {
-		node.ongoingElection = false
+func (node *Node) send(mType msgType, dstEndpoint NodeEndpoint, data string) {
+	if !node.IsAlive {
 		return
 	}
 
-	node.CoordinatorId = node.Id
-
-	for nodeId := range(node.nodeMap) {
-		if nodeId == node.Id {
-			continue
-		}
-		node.Send(MSG_TYPE_ELECTION_WIN, node.nodeMap[nodeId], elId)
+	if dstEndpoint.Id == node.Id {
+		panic(fmt.Sprintf("N%d: Tried to send data to itself: %s", node.Id, data))
 	}
 
-	node.ongoingElection = false
+	msg := Message{mType, node.Id, dstEndpoint.Id, data}
+	log.Printf("N%d: Sent %s to N%d: %s", msg.SrcId, mType, msg.DstId, data)
+
+	if mType == MSG_TYPE_SYNC {
+		dstEndpoint.DataChan <- msg
+	} else {
+		dstEndpoint.ControlChan <- msg
+	}
 }
 
 // Simulate this node going down.
 // To simulate a node going down in a network, we simply stop
 // sending messages.
 func (node *Node) Kill() {
+	node.CoordinatorId = -1
 	node.IsAlive = false
 }
 
 func (node *Node) Restart() {
 	node.IsAlive = true
-	node.StartElection()
+	go node.StartElection()
 }
 
 // Actual teardown of this node.
 func (node *Node) Exit() {
-	
+	node.disableElection = true // Disable just to prevent additional messages
+
+	// Since the above goroutines don't check for quit if they're 'not alive', make them alive
+	node.IsAlive = true
+
+	// Kill all existing goroutines
+	for _, quitChan := range node.quitChans {
+		quitChan <- true
+	}
 }
