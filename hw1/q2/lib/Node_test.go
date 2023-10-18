@@ -36,12 +36,40 @@ func useTempLog() *tempLog {
 	return &tempLog
 }
 
-/**
-  --- TEST INITIALISATION ---
-  These test the basic implementation of the Bully Algorithm.
+/** HELPER FUNCTIONS */
 
-  My implementation has ALL nodes start elections when they join.
-  Hence, these simulate the case where multiple nodes start their own elections simultaneously.
+// Throws a fatal error if 
+func assertCoordinatorId(t *testing.T, o *Orchestrator, tLog *tempLog, expectedId NodeId) {
+	coordId, err := o.GetCoordinatorId(10, time.Second)
+	if err != nil {
+		tLog.Dump(t)
+		t.Fatalf("Test failed: %v", err)
+	} else {
+		if coordId != expectedId {
+			tLog.Dump(t)
+			t.Fatalf("Test failed: Coordinator is %d, expected %d", coordId, expectedId)
+		}
+	}
+}
+
+func assertOverallValue(t *testing.T, o *Orchestrator, tLog *tempLog, expectedValue string) {
+	value, err := o.GetValue()
+	if err != nil {
+		tLog.Dump(t)
+		t.Fatalf("Test failed: %v", err)
+	} else {
+		if value != expectedValue {
+			tLog.Dump(t)
+			t.Fatalf("Test failed: Value is %s, expected %s", value, expectedValue)
+		}
+	}
+}
+
+/**
+  --- BASIC INITIALISATION ---
+  These test the basic implementation of the Bully Algorithm.
+  1. Start up N nodes, wait for election to complete.
+  2. Ensure coordinator node is the one with the highest ID (i.e. ID (N-1)).
 */
 
 
@@ -54,17 +82,7 @@ func TestInitWith1Node(t *testing.T) {
 	o.BlockTillElectionStart(5, time.Second)
 	o.BlockTillElectionDone(5, time.Second)
 
-	coordId, err := o.GetCoordinatorId(10, time.Second)
-
-	if err != nil {
-		tLog.Dump(t)
-		t.Fatalf("1-node test failed: %v", err)
-	} else {
-		if coordId != 0 {
-			tLog.Dump(t)
-			t.Fatalf("1-node test failed: coordinator is N%d", coordId)
-		}
-	}
+	assertCoordinatorId(t, o, tLog, 0)
 
 	o.Exit()
 }
@@ -78,17 +96,7 @@ func TestInitWith5Nodes(t *testing.T) {
 	o.BlockTillElectionStart(5, time.Second)
 	o.BlockTillElectionDone(5, time.Second)
 	
-	coordId, err := o.GetCoordinatorId(10, time.Second)
-
-	if err != nil {
-		tLog.Dump(t)
-		t.Fatalf("5-node test failed: %v", err)
-	} else {
-		if coordId != 4 {
-			tLog.Dump(t)
-			t.Fatalf("5-node test failed: coordinator is N%d", coordId)
-		}
-	}
+	assertCoordinatorId(t, o, tLog, 4)
 
 	o.Exit()
 }
@@ -102,17 +110,7 @@ func TestInitWith10Nodes(t *testing.T) {
 	o.BlockTillElectionStart(5, time.Second)
 	o.BlockTillElectionDone(5, time.Second)
 	
-	coordId, err := o.GetCoordinatorId(10, time.Second)
-
-	if err != nil {
-		tLog.Dump(t)
-		t.Fatalf("10-node test failed: %v", err)
-	} else {
-		if coordId != 9 {
-			tLog.Dump(t)
-			t.Fatalf("10-node test failed: coordinator is N%d", coordId)
-		}
-	}
+	assertCoordinatorId(t, o, tLog, 9)
 
 	o.Exit()
 }
@@ -126,18 +124,116 @@ func TestInitWith50Nodes(t *testing.T) {
 	o.Initiate()
 	o.BlockTillElectionStart(5, time.Second)
 	o.BlockTillElectionDone(5, time.Second)
-	
-	coordId, err := o.GetCoordinatorId(10, time.Second)
 
-	if err != nil {
-		tLog.Dump(t)
-		t.Fatalf("50-node test failed: %v", err)
-	} else {
-		if coordId != 49 {
-			tLog.Dump(t)
-			t.Fatalf("50-node test failed: coordinator is N%d", coordId)
-		}
-	}
+	assertCoordinatorId(t, o, tLog, 49)
+
+	o.Exit()
+}
+
+/**
+  ---COMPLEX INITIALISATION---
+  Tests the scenario where somehow we have multiple nodes considering themselves coordinators.
+  This is possible if the veto timeout (i.e. the time a node waits for a veto)
+  is too short, and the node considers itself a coordinator as a result.
+
+  This should be resolved by the real coordinator detecting a broadcast from lower ID 'coordinators',
+  and automatically resolving that by sending the lower ID coordinator an announcement message.
+*/
+func TestMultipleCoordinatorInitialisation(t *testing.T) {
+	// Initialisation
+	tLog := useTempLog()
+	o := NewOrchestrator(25, DEFAULT_SEND_INTV, DEFAULT_TIMEOUT)
+	o.Initiate()
+	o.BlockTillElectionStart(5, time.Second)
+	o.BlockTillElectionDone(5, time.Second)
+
+	// Here, we modify the coordinator IDs.
+	o.Nodes[0].CoordinatorId = o.Nodes[0].Id
+	o.Nodes[4].CoordinatorId = o.Nodes[4].Id
+	o.Nodes[7].CoordinatorId = o.Nodes[7].Id
+	o.Nodes[13].CoordinatorId = o.Nodes[13].Id
+	o.Nodes[19].CoordinatorId = o.Nodes[19].Id
+	o.Nodes[20].CoordinatorId = o.Nodes[20].Id
+	o.Nodes[22].CoordinatorId = o.Nodes[22].Id
+	o.Nodes[23].CoordinatorId = o.Nodes[23].Id
+
+	time.Sleep(DEFAULT_SEND_INTV + DEFAULT_TIMEOUT) // Max time for propagation of messages
+
+	// Coordinator ID should be resolved.
+	assertCoordinatorId(t, o, tLog, 24)
+}
+
+
+/**
+  ---BASIC SYNCHRONISATION---
+  Tests synchronisation of values among nodes.
+  1. Start up N nodes, wait for election to complete.
+  2. Update coordinator with new value, wait for (RTT + default timeout) for the value to be propagated.
+  3. Ensure ALL nodes have the same modified value.
+*/
+
+func TestSynchronisationWith5Nodes(t *testing.T) {
+	// Initialisation
+	tLog := useTempLog()
+	o := NewOrchestrator(5, DEFAULT_SEND_INTV, DEFAULT_TIMEOUT)
+	o.Initiate()
+	o.BlockTillElectionStart(5, time.Second)
+	o.BlockTillElectionDone(5, time.Second)
+	
+	assertCoordinatorId(t, o, tLog, 4)
+
+	// Update values
+	o.UpdateNodeValue(4, "testing", true)
+	time.Sleep(DEFAULT_SEND_INTV + DEFAULT_TIMEOUT/2) // Send Interval + RTT/2 is max time for propagation
+
+	// Check values
+	assertOverallValue(t, o, tLog, "testing")
+
+	o.Exit()
+}
+
+func TestSynchronisationWith25Nodes(t *testing.T) {
+	// Initialisation
+	tLog := useTempLog()
+	o := NewOrchestrator(25, DEFAULT_SEND_INTV, DEFAULT_TIMEOUT)
+	o.Initiate()
+	o.BlockTillElectionStart(5, time.Second)
+	o.BlockTillElectionDone(5, time.Second)
+	
+	assertCoordinatorId(t, o, tLog, 24)
+
+	// Update values
+	o.UpdateNodeValue(24, "testing", true)
+	time.Sleep(DEFAULT_SEND_INTV + DEFAULT_TIMEOUT/2) // Send Interval + RTT/2 is max time for propagation
+
+	// Check values
+	assertOverallValue(t, o, tLog, "testing")
+
+	o.Exit()
+}
+
+// Here, we modify some of the other values and ensure the true value is propagated.
+func TestSynchronisationAgainWith25Nodes(t *testing.T) {
+	// Initialisation
+	tLog := useTempLog()
+	o := NewOrchestrator(25, DEFAULT_SEND_INTV, DEFAULT_TIMEOUT)
+	o.Initiate()
+	o.BlockTillElectionStart(5, time.Second)
+	o.BlockTillElectionDone(5, time.Second)
+	
+	assertCoordinatorId(t, o, tLog, 24)
+
+	// Update values
+	o.UpdateNodeValue(5, "test", true)
+	o.UpdateNodeValue(8, "testi", true)
+	o.UpdateNodeValue(12, "TEST", true)
+	o.UpdateNodeValue(15, "asdf", true)
+	o.UpdateNodeValue(20, "abcde", true)
+	o.UpdateNodeValue(24, "testing", true)
+	time.Sleep(DEFAULT_SEND_INTV + DEFAULT_TIMEOUT/2) // Send Interval + RTT/2 is max time for propagation
+
+	// Check values
+	assertOverallValue(t, o, tLog, "testing")
 
 	o.Exit()
 }
@@ -158,17 +254,7 @@ func TestCoordCrashWith5Nodes(t *testing.T) {
 	o.BlockTillElectionStart(5, time.Second)
 	o.BlockTillElectionDone(5, time.Second)
 	
-	coordId, err := o.GetCoordinatorId(10, time.Second)
-
-	if err != nil {
-		tLog.Dump(t)
-		t.Fatalf("5-node test failed: %v", err)
-	} else {
-		if coordId != 4 {
-			tLog.Dump(t)
-			t.Fatalf("5-node test failed: coordinator is N%d", coordId)
-		}
-	}
+	assertCoordinatorId(t, o, tLog, 4)
 
 	// Killing of coordinator
 	o.KillNode(4)
@@ -176,17 +262,7 @@ func TestCoordCrashWith5Nodes(t *testing.T) {
 	o.BlockTillElectionStart(5, time.Second)
 	o.BlockTillElectionDone(5, time.Second)
 	
-	coordId, err = o.GetCoordinatorId(10, time.Second)
-
-	if err != nil {
-		tLog.Dump(t)
-		t.Fatalf("5-node coordinator crash test failed: %v", err)
-	} else {
-		if coordId != 3 {
-			tLog.Dump(t)
-			t.Fatalf("5-node coordinator crash test failed: coordinator is N%d", coordId)
-		}
-	}
+	assertCoordinatorId(t, o, tLog, 3)
 
 	o.Exit()
 }
@@ -200,17 +276,7 @@ func TestCoordCrashWith25Nodes(t *testing.T) {
 	o.BlockTillElectionStart(5, time.Second)
 	o.BlockTillElectionDone(5, time.Second)
 	
-	coordId, err := o.GetCoordinatorId(10, time.Second)
-
-	if err != nil {
-		tLog.Dump(t)
-		t.Fatalf("25-node test failed: %v", err)
-	} else {
-		if coordId != 24 {
-			tLog.Dump(t)
-			t.Fatalf("25-node test failed: coordinator is N%d", coordId)
-		}
-	}
+	assertCoordinatorId(t, o, tLog, 24)
 
 	// Killing of coordinator
 	o.KillNode(24)
@@ -218,21 +284,15 @@ func TestCoordCrashWith25Nodes(t *testing.T) {
 	o.BlockTillElectionStart(5, time.Second)
 	o.BlockTillElectionDone(5, time.Second)
 	
-	coordId, err = o.GetCoordinatorId(10, time.Second)
-
-	if err != nil {
-		tLog.Dump(t)
-		t.Fatalf("25-node coordinator crash test failed: %v", err)
-	} else {
-		if coordId != 23 {
-			tLog.Dump(t)
-			t.Fatalf("25-node coordinator crash test failed: coordinator is N%d", coordId)
-		}
-	}
+	assertCoordinatorId(t, o, tLog, 23)
 
 	o.Exit()
 }
 
+
+/**
+  Basic Crash and Reboot Tests
+*/
 
 
 // After initialisation, coordinator crash should result in new coordinator, and reset to original coordinator upon reboot
@@ -244,17 +304,7 @@ func TestCoordCrashAndRebootWith5Nodes(t *testing.T) {
 	o.BlockTillElectionStart(5, time.Second)
 	o.BlockTillElectionDone(5, time.Second)
 	
-	coordId, err := o.GetCoordinatorId(10, time.Second)
-
-	if err != nil {
-		tLog.Dump(t)
-		t.Fatalf("5-node test failed: %v", err)
-	} else {
-		if coordId != 4 {
-			tLog.Dump(t)
-			t.Fatalf("5-node test failed: coordinator is N%d", coordId)
-		}
-	}
+	assertCoordinatorId(t, o, tLog, 4)
 
 	// Killing of coordinator
 	o.KillNode(4)
@@ -262,39 +312,17 @@ func TestCoordCrashAndRebootWith5Nodes(t *testing.T) {
 	o.BlockTillElectionStart(5, time.Second)
 	o.BlockTillElectionDone(5, time.Second)
 	
-	coordId, err = o.GetCoordinatorId(10, time.Second)
-
-	if err != nil {
-		tLog.Dump(t)
-		t.Fatalf("5-node coordinator crash test failed: %v", err)
-	} else {
-		if coordId != 3 {
-			tLog.Dump(t)
-			t.Fatalf("5-node coordinator crash test failed: coordinator is N%d", coordId)
-		}
-	}
+	assertCoordinatorId(t, o, tLog, 3)
 
 	// Reboot of original coordinator
 	o.RestartNode(4)
 	o.BlockTillElectionStart(5, time.Second)
 	o.BlockTillElectionDone(5, time.Second)
 	
-	coordId, err = o.GetCoordinatorId(10, time.Second)
-
-	if err != nil {
-		tLog.Dump(t)
-		t.Fatalf("5-node reboot test failed: %v", err)
-	} else {
-		if coordId != 4 {
-			tLog.Dump(t)
-			t.Fatalf("5-node reboot test failed: coordinator is N%d", coordId)
-		}
-	}
-	
+	assertCoordinatorId(t, o, tLog, 4)
 
 	o.Exit()
 }
-
 
 // After initialisation, coordinator crash should result in new coordinator, and reset to original coordinator upon reboot
 func TestCoordCrashAndRebootWith25Nodes(t *testing.T) {
@@ -305,17 +333,7 @@ func TestCoordCrashAndRebootWith25Nodes(t *testing.T) {
 	o.BlockTillElectionStart(5, time.Second)
 	o.BlockTillElectionDone(5, time.Second)
 	
-	coordId, err := o.GetCoordinatorId(10, time.Second)
-
-	if err != nil {
-		tLog.Dump(t)
-		t.Fatalf("25-node test failed: %v", err)
-	} else {
-		if coordId != 24 {
-			tLog.Dump(t)
-			t.Fatalf("25-node test failed: coordinator is N%d", coordId)
-		}
-	}
+	assertCoordinatorId(t, o, tLog, 24)
 
 	// Killing of coordinator
 	o.KillNode(24)
@@ -323,34 +341,14 @@ func TestCoordCrashAndRebootWith25Nodes(t *testing.T) {
 	o.BlockTillElectionStart(5, time.Second)
 	o.BlockTillElectionDone(5, time.Second)
 	
-	coordId, err = o.GetCoordinatorId(10, time.Second)
-
-	if err != nil {
-		tLog.Dump(t)
-		t.Fatalf("25-node coordinator crash test failed: %v", err)
-	} else {
-		if coordId != 23 {
-			tLog.Dump(t)
-			t.Fatalf("25-node coordinator crash test failed: coordinator is N%d", coordId)
-		}
-	}
+	assertCoordinatorId(t, o, tLog, 23)
 
 	// Reboot of original coordinator
 	o.RestartNode(24)
 	o.BlockTillElectionStart(5, time.Second)
 	o.BlockTillElectionDone(5, time.Second)
 	
-	coordId, err = o.GetCoordinatorId(10, time.Second)
-
-	if err != nil {
-		tLog.Dump(t)
-		t.Fatalf("25-node reboot test failed: %v", err)
-	} else {
-		if coordId != 24 {
-			tLog.Dump(t)
-			t.Fatalf("25-node reboot test failed: coordinator is N%d", coordId)
-		}
-	}
+	assertCoordinatorId(t, o, tLog, 24)
 	
 
 	o.Exit()

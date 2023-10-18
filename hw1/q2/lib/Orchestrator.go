@@ -34,16 +34,49 @@ func (o *Orchestrator) Initiate() {
 	}
 }
 
-func (o *Orchestrator) GetCoordinatorIds() map[NodeId]NodeId {
-	coordIds := make(map[NodeId]NodeId)
+func (o *Orchestrator) GetValues() map[NodeId]string {
+	coordValues := make(map[NodeId]string)
 	for nodeId := range(o.Nodes) {
-		// Check first if the node is actually alive, since we set the coordinator ID of dead nodes to be -1
+		// Check first if the node is actually alive, since dead nodes won't be updated
 		if !o.Nodes[nodeId].IsAlive {
 			continue
 		}
-		coordIds[nodeId] = o.Nodes[nodeId].CoordinatorId
+		coordValues[nodeId] = o.Nodes[nodeId].Data
 	}
-	return coordIds
+	return coordValues
+}
+
+// Returns the overall value. Throws an error if the values are not the same.
+func (o *Orchestrator) GetValue() (string, error) {
+	if len(o.Nodes) == 0 {
+		panic("No nodes to get value from")
+	}
+	
+	value := ""
+	readFirstLiveNode := false
+	
+	for _, nodeValue := range(o.GetValues()) {
+		if value != nodeValue {
+			// either we're at the first live node, or value is different
+			if readFirstLiveNode {
+				// then value is different
+				return "", errors.New(fmt.Sprintf("No single value: Has \"%s\" and \"%s\".", nodeValue, value))
+			} else {
+				// we're at the first live node
+				value = nodeValue
+			}
+		}
+	}
+
+	return value, nil
+}
+
+func (o *Orchestrator) UpdateNodeValue(id NodeId, value string, force bool) {
+	if force {
+		o.Nodes[id].Data = value
+	} else {
+		o.Nodes[id].PushUpdate(value)
+	}
 }
 
 func (o *Orchestrator) KillNode(id NodeId) {
@@ -102,6 +135,18 @@ func (o *Orchestrator) BlockTillElectionDone(maxPolls int, pollTick time.Duratio
 	return nil
 }
 
+func (o *Orchestrator) GetCoordinatorIds() map[NodeId]NodeId {
+	coordIds := make(map[NodeId]NodeId)
+	for nodeId := range(o.Nodes) {
+		// Check first if the node is actually alive, since we set the coordinator ID of dead nodes to be -1
+		if !o.Nodes[nodeId].IsAlive {
+			continue
+		}
+		coordIds[nodeId] = o.Nodes[nodeId].CoordinatorId
+	}
+	return coordIds
+}
+
 // Returns the coordinator ID after election has settled.
 // Blocks if election has not been settled, gives error after 5 seconds.
 func (o *Orchestrator) GetCoordinatorId(maxPolls int, pollTick time.Duration) (NodeId, error) {
@@ -112,9 +157,12 @@ func (o *Orchestrator) GetCoordinatorId(maxPolls int, pollTick time.Duration) (N
 	
 	// Ensure coordId is the same
 	coordId := NodeId(-1)
+	readFirstLiveNode := false
 	for i, nodeId := range(o.GetCoordinatorIds()) {
-		if nodeId != coordId && coordId != -1 {
-			return -1, errors.New(fmt.Sprintf("Election settled, but no single coordinatorId (Has C%d (from N%d) and N%d.", nodeId, i, coordId))
+		if readFirstLiveNode {
+			if nodeId != coordId {
+				return -1, errors.New(fmt.Sprintf("Election settled, but no single coordinatorId (Has C%d (from N%d) and N%d.", nodeId, i, coordId))
+			}
 		} else {
 			coordId = nodeId
 		}
