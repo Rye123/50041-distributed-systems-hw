@@ -8,7 +8,7 @@ import (
 )
 
 const DEFAULT_SEND_INTV = 5 * time.Second
-const DEFAULT_TIMEOUT = 1 * time.Second
+const DEFAULT_TIMEOUT = 2 * time.Second
 
 // Simple struct to contain contents of log
 type tempLog struct {
@@ -38,7 +38,7 @@ func useTempLog() *tempLog {
 
 /** HELPER FUNCTIONS */
 
-// Throws a fatal error if 
+// Throws a fatal error if the coordinator ID doesn't match the expected ID.
 func assertCoordinatorId(t *testing.T, o *Orchestrator, tLog *tempLog, expectedId NodeId) {
 	coordId, err := o.GetCoordinatorId(10, time.Second)
 	if err != nil {
@@ -52,6 +52,7 @@ func assertCoordinatorId(t *testing.T, o *Orchestrator, tLog *tempLog, expectedI
 	}
 }
 
+// Throws a fatal error if the value stored in the system doesn't match the expected value.
 func assertOverallValue(t *testing.T, o *Orchestrator, tLog *tempLog, expectedValue string) {
 	value, err := o.GetValue()
 	if err != nil {
@@ -72,9 +73,7 @@ func assertOverallValue(t *testing.T, o *Orchestrator, tLog *tempLog, expectedVa
   2. Ensure coordinator node is the one with the highest ID (i.e. ID (N-1)).
 */
 
-
-// Upon initialisation, should eventually end up with a final coordinator ID.
-func TestInitWith1Node(t *testing.T) {
+func Test_BasicInit_1Node(t *testing.T) {
 	// Test with 1 node
 	tLog := useTempLog()
 	o := NewOrchestrator(1, DEFAULT_SEND_INTV, DEFAULT_TIMEOUT)
@@ -87,8 +86,7 @@ func TestInitWith1Node(t *testing.T) {
 	o.Exit()
 }
 
-// Upon initialisation, should eventually end up with a final coordinator ID.
-func TestInitWith5Nodes(t *testing.T) {
+func Test_BasicInit_5Nodes(t *testing.T) {
 	// Test with 5 nodes
 	tLog := useTempLog()
 	o := NewOrchestrator(5, DEFAULT_SEND_INTV, DEFAULT_TIMEOUT)
@@ -101,8 +99,7 @@ func TestInitWith5Nodes(t *testing.T) {
 	o.Exit()
 }
 
-// Upon initialisation, should eventually end up with a final coordinator ID.
-func TestInitWith10Nodes(t *testing.T) {
+func Test_BasicInit_10Nodes(t *testing.T) {
 	// Test with 10 nodes
 	tLog := useTempLog()
 	o := NewOrchestrator(10, DEFAULT_SEND_INTV, DEFAULT_TIMEOUT)
@@ -115,9 +112,7 @@ func TestInitWith10Nodes(t *testing.T) {
 	o.Exit()
 }
 
-
-// Upon initialisation, should eventually end up with a final coordinator ID.
-func TestInitWith50Nodes(t *testing.T) {
+func Test_BasicInit_50Nodes(t *testing.T) {
 	// Test with 50 nodes
 	tLog := useTempLog()
 	o := NewOrchestrator(50, DEFAULT_SEND_INTV, DEFAULT_TIMEOUT)
@@ -130,6 +125,7 @@ func TestInitWith50Nodes(t *testing.T) {
 	o.Exit()
 }
 
+
 /**
   ---COMPLEX INITIALISATION---
   Tests the scenario where somehow we have multiple nodes considering themselves coordinators.
@@ -139,15 +135,18 @@ func TestInitWith50Nodes(t *testing.T) {
   This should be resolved by the real coordinator detecting a broadcast from lower ID 'coordinators',
   and automatically resolving that by sending the lower ID coordinator an announcement message.
 */
-func TestMultipleCoordinatorInitialisation(t *testing.T) {
+func Test_ComplexInit(t *testing.T) {
 	// Initialisation
 	tLog := useTempLog()
 	o := NewOrchestrator(25, DEFAULT_SEND_INTV, DEFAULT_TIMEOUT)
 	o.Initiate()
 	o.BlockTillElectionStart(5, time.Second)
 	o.BlockTillElectionDone(5, time.Second)
+	assertCoordinatorId(t, o, tLog, 24)
 
 	// Here, we modify the coordinator IDs.
+	tLog = useTempLog()  // Clear previous tempLog
+	log.Println("Orchestrator: Manually modifying coordinator IDs.")
 	o.Nodes[0].CoordinatorId = o.Nodes[0].Id
 	o.Nodes[4].CoordinatorId = o.Nodes[4].Id
 	o.Nodes[7].CoordinatorId = o.Nodes[7].Id
@@ -156,6 +155,12 @@ func TestMultipleCoordinatorInitialisation(t *testing.T) {
 	o.Nodes[20].CoordinatorId = o.Nodes[20].Id
 	o.Nodes[22].CoordinatorId = o.Nodes[22].Id
 	o.Nodes[23].CoordinatorId = o.Nodes[23].Id
+	
+	coordId, err := o.GetCoordinatorId(0, time.Second)
+	if err == nil {
+		tLog.Dump(t)
+		t.Fatalf("Failed to mess up the coordinators, coordinator ID is %d", coordId)
+	}
 
 	time.Sleep(DEFAULT_SEND_INTV + DEFAULT_TIMEOUT) // Max time for propagation of messages
 
@@ -172,7 +177,7 @@ func TestMultipleCoordinatorInitialisation(t *testing.T) {
   3. Ensure ALL nodes have the same modified value.
 */
 
-func TestSynchronisationWith5Nodes(t *testing.T) {
+func Test_BasicSync_5Nodes(t *testing.T) {
 	// Initialisation
 	tLog := useTempLog()
 	o := NewOrchestrator(5, DEFAULT_SEND_INTV, DEFAULT_TIMEOUT)
@@ -192,7 +197,7 @@ func TestSynchronisationWith5Nodes(t *testing.T) {
 	o.Exit()
 }
 
-func TestSynchronisationWith25Nodes(t *testing.T) {
+func Test_BasicSync_25Nodes(t *testing.T) {
 	// Initialisation
 	tLog := useTempLog()
 	o := NewOrchestrator(25, DEFAULT_SEND_INTV, DEFAULT_TIMEOUT)
@@ -213,7 +218,7 @@ func TestSynchronisationWith25Nodes(t *testing.T) {
 }
 
 // Here, we modify some of the other values and ensure the true value is propagated.
-func TestSynchronisationAgainWith25Nodes(t *testing.T) {
+func Test_BasicSync_25Nodes_Corrupted(t *testing.T) {
 	// Initialisation
 	tLog := useTempLog()
 	o := NewOrchestrator(25, DEFAULT_SEND_INTV, DEFAULT_TIMEOUT)
@@ -240,14 +245,14 @@ func TestSynchronisationAgainWith25Nodes(t *testing.T) {
 
 
 /**
-  TEST COORDINATOR CRASH
+  ---BASIC CRASH---
   These test cases tests what happens when the coordinator goes down.
+
+  A coordinator crash should result in a new coordinator being elected.
 */
 
-
-// After initialisation, coordinator crash should result in new coordinator
-func TestCoordCrashWith5Nodes(t *testing.T) {
-	// Initialisation: Might as well test this as well :)
+func Test_BasicCrash_5Nodes(t *testing.T) {
+	// Initialisation
 	tLog := useTempLog()
 	o := NewOrchestrator(5, DEFAULT_SEND_INTV, DEFAULT_TIMEOUT)
 	o.Initiate()
@@ -255,6 +260,7 @@ func TestCoordCrashWith5Nodes(t *testing.T) {
 	o.BlockTillElectionDone(5, time.Second)
 	
 	assertCoordinatorId(t, o, tLog, 4)
+	tLog = useTempLog() // Clear log before killing the node
 
 	// Killing of coordinator
 	o.KillNode(4)
@@ -267,9 +273,8 @@ func TestCoordCrashWith5Nodes(t *testing.T) {
 	o.Exit()
 }
 
-// After initialisation, coordinator crash should result in new coordinator
-func TestCoordCrashWith25Nodes(t *testing.T) {
-	// Initialisation: Might as well test this as well :)
+func Test_BasicCrash_25Nodes(t *testing.T) {
+	// Initialisation
 	tLog := useTempLog()
 	o := NewOrchestrator(25, DEFAULT_SEND_INTV, DEFAULT_TIMEOUT)
 	o.Initiate()
@@ -277,6 +282,7 @@ func TestCoordCrashWith25Nodes(t *testing.T) {
 	o.BlockTillElectionDone(5, time.Second)
 	
 	assertCoordinatorId(t, o, tLog, 24)
+	tLog = useTempLog() // Clear log before killing the node
 
 	// Killing of coordinator
 	o.KillNode(24)
@@ -291,13 +297,18 @@ func TestCoordCrashWith25Nodes(t *testing.T) {
 
 
 /**
-  Basic Crash and Reboot Tests
+  ---BASIC CRASH AND REBOOT---
+  After the crash, system should elect a new coordinator. After reboot of original coordinator, system should elect the highest ID.
+  
+  1. Start up N nodes, wait for election to complete.
+  2. Kill coordinator node.
+  3. Ensure node with the next highest ID is selected.
+  4. Reboot coordinator node.
+  5. Ensure original coordinator (with highest ID) is re-elected.
 */
 
-
-// After initialisation, coordinator crash should result in new coordinator, and reset to original coordinator upon reboot
-func TestCoordCrashAndRebootWith5Nodes(t *testing.T) {
-	// Initialisation: Might as well test this as well :)
+func Test_BasicCrashAndReboot_5Nodes(t *testing.T) {
+	// Initialisation
 	tLog := useTempLog()
 	o := NewOrchestrator(5, DEFAULT_SEND_INTV, DEFAULT_TIMEOUT)
 	o.Initiate()
@@ -305,6 +316,7 @@ func TestCoordCrashAndRebootWith5Nodes(t *testing.T) {
 	o.BlockTillElectionDone(5, time.Second)
 	
 	assertCoordinatorId(t, o, tLog, 4)
+	tLog = useTempLog() // Clear log before killing the node
 
 	// Killing of coordinator
 	o.KillNode(4)
@@ -325,8 +337,8 @@ func TestCoordCrashAndRebootWith5Nodes(t *testing.T) {
 }
 
 // After initialisation, coordinator crash should result in new coordinator, and reset to original coordinator upon reboot
-func TestCoordCrashAndRebootWith25Nodes(t *testing.T) {
-	// Initialisation: Might as well test this as well :)
+func Test_BasicCrashAndReboot_25Nodes(t *testing.T) {
+	// Initialisation
 	tLog := useTempLog()
 	o := NewOrchestrator(25, DEFAULT_SEND_INTV, DEFAULT_TIMEOUT)
 	o.Initiate()
@@ -334,6 +346,7 @@ func TestCoordCrashAndRebootWith25Nodes(t *testing.T) {
 	o.BlockTillElectionDone(5, time.Second)
 	
 	assertCoordinatorId(t, o, tLog, 24)
+	tLog = useTempLog() // Clear log before killing the node
 
 	// Killing of coordinator
 	o.KillNode(24)

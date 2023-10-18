@@ -15,7 +15,7 @@ func NewOrchestrator(nodeCount int, sendIntv, timeout time.Duration) *Orchestrat
 
 	for nodeId := 0; nodeId < nodeCount; nodeId++ {
 		nodeId := NodeId(nodeId)
-		nodes[nodeId] = NewNode(nodeId, sendIntv, timeout, false)
+		nodes[nodeId] = NewNode(nodeId, sendIntv, timeout, false, nodeCount)
 	}
 
 	return &Orchestrator{nodes}

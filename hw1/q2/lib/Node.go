@@ -57,13 +57,13 @@ type Node struct {
 }
 
 // Creates a new node.
-func NewNode(id NodeId, sendInterval, timeout time.Duration, disableElection bool) *Node {
+func NewNode(id NodeId, sendInterval, timeout time.Duration, disableElection bool, nodeCount int) *Node {
 	return &Node{
 		id, -1, "", true,
 		NodeEndpoint{id, make(chan Message), make(chan Message)},
-		make(map[NodeId]NodeEndpoint, 0),
+		make(map[NodeId]NodeEndpoint, nodeCount),
 		sendInterval, timeout,
-		make(chan Message, 100),
+		make(chan Message, nodeCount),
 		"", make(chan bool),
 		disableElection,
 		&sync.Mutex{},
@@ -155,9 +155,13 @@ func (node *Node) HandleControl() {
 			case MSG_TYPE_ELECTION_VETO:
 				// If we receive a veto:
 				// pass it along to the StartElection if we have an ongoing election
+				if node.ongoingElectionId == "" {
+					continue
+				}
+				
 				if msg.Data == node.ongoingElectionId {
 					log.Printf("N%d: Received ELECTION_VETO from N%d.", node.Id, msg.SrcId)
-					go func() { node.vetoChan <- msg }() // Just throw it, it will be received
+					node.vetoChan <- msg
 				}
 			case MSG_TYPE_ELECTION_WIN:
 				// If another node declares it has won...
@@ -200,7 +204,11 @@ func (node *Node) HandleData() {
 
 			if msg.SrcId == node.Id {
 				panic(fmt.Sprintf("N%d: Received a message from itself", node.Id))
-			} else if msg.SrcId < node.Id {
+			}
+
+			// Received message from ID lower than self
+			if msg.SrcId < node.Id {
+				log.Printf("N%d: Received message from lower ID, start election", node.Id)
 				// I don't take orders from you!!!
 				node.StartElection()
 				continue
@@ -260,7 +268,7 @@ func (node *Node) StartElection() {
 			if nodeId <= node.Id {
 				continue
 			}
-			go node.send(MSG_TYPE_ELECTION_START, node.endpoints[nodeId], node.ongoingElectionId)
+			node.send(MSG_TYPE_ELECTION_START, node.endpoints[nodeId], node.ongoingElectionId)
 		}
 
 		// Watch for timeout or vetoes
