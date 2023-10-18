@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"log"
 	"math/rand"
+	"sync"
 	"time"
 )
-const BUFFER_MAX = 500
 
 type msgType string
 
@@ -46,49 +46,49 @@ type Node struct {
 	Data              string                  // The data structure to be synchronised.
 	IsAlive           bool                    // Simulated liveness to simulate a fault.
 	Endpoint          NodeEndpoint            // This node's endpoint
-	endpoints           map[NodeId]NodeEndpoint // Maps a node ID to their endpoint
+	endpoints         map[NodeId]NodeEndpoint // Maps a node ID to their endpoint
 	sendIntv          time.Duration           // How often data is to be sent from the coordinator
 	timeout           time.Duration           // Estimated RTT for messages
 	vetoChan          chan Message            // Internal channel to monitor for vetoes during an election
-	ongoingElectionId string                    // Election ID of current election ("" if no election)
-	quitChans         [](chan bool)           // Internal channels to kill goroutines
-	disableElection    bool                    // Internal control to disable this ndoe starting elections
+	ongoingElectionId string                  // Election ID of current election ("" if no election)
+	quitChan          chan bool               // Internal channels to kill goroutines
+	disableElection   bool                    // Internal control to disable this ndoe starting elections
+	electionLock      *sync.Mutex
 }
 
 // Creates a new node.
 func NewNode(id NodeId, sendInterval, timeout time.Duration, disableElection bool) *Node {
 	return &Node{
 		id, -1, "", true,
-		NodeEndpoint{id, make(chan Message, BUFFER_MAX), make(chan Message, BUFFER_MAX)},
+		NodeEndpoint{id, make(chan Message), make(chan Message)},
 		make(map[NodeId]NodeEndpoint, 0),
 		sendInterval, timeout,
-		make(chan Message),
-		"", make([](chan bool), 0),
+		make(chan Message, 100),
+		"", make(chan bool),
 		disableElection,
+		&sync.Mutex{},
 	}
 }
 
 // Given a list of endpoints of nodes, initialise the Node.
 func (node *Node) Initialise(endpoints []NodeEndpoint) {
-	for _, other := range(endpoints) {
+	for _, other := range endpoints {
 		if other.Id == node.Id {
 			continue
 		}
 		node.endpoints[other.Id] = other
 	}
 
-	node.quitChans = append(node.quitChans, make(chan bool), make(chan bool), make(chan bool))
-
 	// Start up goroutines to handle necessary incoming messages
-	go node.HandleControl(node.quitChans[0])
-	go node.HandleData(node.quitChans[1])
-	go node.SyncData(node.quitChans[2])
+	go node.HandleControl()
+	go node.HandleData()
+	go node.SyncData()
 
 	node.StartElection() // Start election upon initialisation
 }
 
 // Coordinator function to send data, if this node is the coordinator.
-func (node *Node) SyncData(quit chan bool) {
+func (node *Node) SyncData() {
 	for {
 		select {
 		case <-time.After(node.sendIntv):
@@ -106,7 +106,7 @@ func (node *Node) SyncData(quit chan bool) {
 			for nodeId := range node.endpoints {
 				node.send(MSG_TYPE_SYNC, node.endpoints[nodeId], node.Data)
 			}
-		case <-quit:
+		case <-node.quitChan:
 			log.Printf("N%d: Shutting down SyncData.", node.Id)
 			return
 		}
@@ -114,7 +114,7 @@ func (node *Node) SyncData(quit chan bool) {
 }
 
 // Handle control messages
-func (node *Node) HandleControl(quit chan bool) {
+func (node *Node) HandleControl() {
 	for {
 		select {
 		case msg, ok := <-node.Endpoint.ControlChan:
@@ -133,7 +133,7 @@ func (node *Node) HandleControl(quit chan bool) {
 
 			// Drop message if dead
 			if !node.IsAlive {
-				// log.Printf("N%d: Dropped incoming message from %d, node is dead.", node.Id, msg.SrcId)
+				log.Printf("N%d: Dropped incoming message from %d, node is dead.", node.Id, msg.SrcId)
 				continue
 			}
 
@@ -142,7 +142,7 @@ func (node *Node) HandleControl(quit chan bool) {
 			case MSG_TYPE_SYNC:
 				panic(fmt.Sprintf("N%d: Received MSG_TYPE_SYNC on ControlChan", node.Id))
 			case MSG_TYPE_ELECTION_START:
-				// If another node is starting an election, reject if ID lower
+				// If another node is starting an election, reject if ID lower and start an election
 				// log.Printf("N%d: Received ELECTION_START from N%d.", node.Id, msg.SrcId)
 				if msg.SrcId < node.Id {
 					node.send(
@@ -150,28 +150,27 @@ func (node *Node) HandleControl(quit chan bool) {
 						node.endpoints[msg.SrcId],
 						msg.Data, // Note we use the same election ID.
 					)
+					node.StartElection()
 				}
 			case MSG_TYPE_ELECTION_VETO:
 				// If we receive a veto:
 				// pass it along to the StartElection if we have an ongoing election
 				if msg.Data == node.ongoingElectionId {
-					// log.Printf("N%d: Received ELECTION_VETO from N%d.", node.Id, msg.SrcId)
-
-					// Do this in a separate goroutine, since we don't want to block the controlchan listening
-					go func() { node.vetoChan <- msg }()
+					log.Printf("N%d: Received ELECTION_VETO from N%d.", node.Id, msg.SrcId)
+					go func() { node.vetoChan <- msg }() // Just throw it, it will be received
 				}
 			case MSG_TYPE_ELECTION_WIN:
 				// If another node declares it has won...
-				// log.Printf("N%d: Received ELECTION_WIN from N%d.", node.Id, msg.SrcId)
+				log.Printf("N%d: Received ELECTION_WIN from N%d.", node.Id, msg.SrcId)
 				if msg.SrcId < node.Id {
-					// DEMAND A RECOUNT
+					// (politely) remind everyone who the boss is
 					node.StartElection()
 				} else {
 					// ok you win
 					node.CoordinatorId = msg.SrcId
 				}
 			}
-		case <-quit:
+		case <-node.quitChan:
 			log.Printf("N%d: Shutting down HandleControl.", node.Id)
 			return
 		}
@@ -179,7 +178,7 @@ func (node *Node) HandleControl(quit chan bool) {
 }
 
 // Handle data messages
-func (node *Node) HandleData(quit chan bool) {
+func (node *Node) HandleData() {
 	// We expect a data message AT LEAST every (node.sendIntv + node.timeout/2) seconds.
 	// node.sendIntv is the interval the coordinator should send a message
 	// node.timeout is the (simulated) time taken to get a response after sending a request, i.e. RTT
@@ -217,7 +216,7 @@ func (node *Node) HandleData(quit chan bool) {
 			// Assume coordinator is down.
 			log.Printf("N%d: Detected coordinator is down.", node.Id)
 			node.StartElection()
-		case <-quit:
+		case <-node.quitChan:
 			log.Printf("N%d: Shutting down HandleData", node.Id)
 			return
 		}
@@ -226,27 +225,42 @@ func (node *Node) HandleData(quit chan bool) {
 
 // Initiate an election
 func (node *Node) StartElection() {
-	if node.ongoingElectionId != "" {
-		return
-	}
 	if node.disableElection {
 		return
 	}
 
+	// Prevent a node from starting an election if it has already started one.
+	if node.ongoingElectionId != "" {
+		return
+	}
+
+	// We use TryLock here because we really don't have to re-acquire the lock to start an election if we already started an election
+	if !node.electionLock.TryLock() {
+		return
+	}
+
+	// Acquired the lock, start a goroutine to manage the election while we continue on
 	go func() {
 		node.ongoingElectionId = fmt.Sprintf("EL%d", rand.Int()) // Random election ID
 		log.Printf("N%d: Starting election with ID: %v", node.Id, node.ongoingElectionId)
 
-		defer func() { node.ongoingElectionId = "" }()
-		
+		defer func() {
+			// Election is over, clear election veto channel
+			for len(node.vetoChan) > 0 {
+				<-node.vetoChan
+			}
+			node.ongoingElectionId = ""
+			node.electionLock.Unlock()
+		}()
+
 		veto := false
 
-		for nodeId := range(node.endpoints) {
+		for nodeId := range node.endpoints {
 			nodeId := nodeId
 			if nodeId <= node.Id {
 				continue
 			}
-			node.send(MSG_TYPE_ELECTION_START, node.endpoints[nodeId], node.ongoingElectionId)
+			go node.send(MSG_TYPE_ELECTION_START, node.endpoints[nodeId], node.ongoingElectionId)
 		}
 
 		// Watch for timeout or vetoes
@@ -265,7 +279,7 @@ func (node *Node) StartElection() {
 			log.Printf("N%d: Won election %s.", node.Id, node.ongoingElectionId)
 
 			node.CoordinatorId = node.Id
-			for nodeId := range(node.endpoints) {
+			for nodeId := range node.endpoints {
 				if nodeId >= node.Id {
 					continue
 				}
@@ -298,12 +312,12 @@ func (node *Node) send(mType msgType, dstEndpoint NodeEndpoint, data string) {
 	}
 
 	msg := Message{mType, node.Id, dstEndpoint.Id, data}
-	// log.Printf("N%d: Sent %s to N%d: %s", msg.SrcId, mType, msg.DstId, data)
+	//log.Printf("N%d: Sent %s to N%d: %s", msg.SrcId, mType, msg.DstId, data)
 
 	if mType == MSG_TYPE_SYNC {
-		dstEndpoint.DataChan <- msg
+		go func() { dstEndpoint.DataChan <- msg }()
 	} else {
-		dstEndpoint.ControlChan <- msg
+		go func() { dstEndpoint.ControlChan <- msg }()
 	}
 }
 
@@ -329,7 +343,7 @@ func (node *Node) Exit() {
 	node.IsAlive = true
 
 	// Kill all existing goroutines
-	for _, quitChan := range node.quitChans {
-		quitChan <- true
+	for i := 0; i < 3; i++ {
+		node.quitChan <- true
 	}
 }
