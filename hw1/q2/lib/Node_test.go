@@ -366,3 +366,43 @@ func Test_BasicCrashAndReboot_25Nodes(t *testing.T) {
 
 	o.Exit()
 }
+
+func Test_Durability_CrashAndReboot_25Nodes(t *testing.T) {
+	// Initialisation
+	tLog := useTempLog()
+	o := NewOrchestrator(25, DEFAULT_SEND_INTV, DEFAULT_TIMEOUT)
+	o.Initiate()
+	o.BlockTillElectionStart(5, time.Second)
+	o.BlockTillElectionDone(5, time.Second)
+	
+	assertCoordinatorId(t, o, tLog, 24)
+	tLog = useTempLog() // Clear log before killing the node
+
+	// Kill 10 nodes
+	o.KillNode(24); o.KillNode(22); o.KillNode(21); o.KillNode(19); o.KillNode(18)
+	o.KillNode(15); o.KillNode(13); o.KillNode(10); o.KillNode(7); o.KillNode(5)
+
+	time.Sleep(DEFAULT_TIMEOUT/2 + DEFAULT_SEND_INTV)
+	o.BlockTillElectionStart(5, time.Second)
+	o.BlockTillElectionDone(5, time.Second)
+	
+	assertCoordinatorId(t, o, tLog, 23)
+
+	// Kill 2 more
+	o.KillNode(23); o.KillNode(20);
+
+	time.Sleep(DEFAULT_TIMEOUT/2 + DEFAULT_SEND_INTV)
+	o.BlockTillElectionStart(5, time.Second)
+	o.BlockTillElectionDone(5, time.Second)
+	
+	assertCoordinatorId(t, o, tLog, 17)
+
+	// Reboot
+	o.RestartNode(22)
+	o.BlockTillElectionStart(5, time.Second)
+	o.BlockTillElectionDone(5, time.Second)
+
+	assertCoordinatorId(t, o, tLog, 22)
+
+	o.Exit()
+}
