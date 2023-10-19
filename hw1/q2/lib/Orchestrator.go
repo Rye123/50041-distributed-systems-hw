@@ -21,6 +21,17 @@ func NewOrchestrator(nodeCount int, sendIntv, timeout time.Duration) *Orchestrat
 	return &Orchestrator{nodes}
 }
 
+func (o *Orchestrator) KillNode(id NodeId) {
+	o.Nodes[id].Kill()
+}
+
+func (o *Orchestrator) RestartNode(id NodeId) {
+	if o.Nodes[id].IsAlive {
+		panic("Tried to start an alive node")
+	}
+	o.Nodes[id].Restart()
+}
+
 // Initialise system, returns only after election completed
 func (o *Orchestrator) Initiate() {
 	endpoints := make([]NodeEndpoint, 0)
@@ -33,6 +44,54 @@ func (o *Orchestrator) Initiate() {
 		go o.Nodes[nodeId].Initialise(endpoints)
 	}
 }
+
+/**
+  ELECTION FUNCTIONS
+  These check for when an election has started/concluded.
+ */
+
+// We try to acquire all the locks
+func (o *Orchestrator) HasOngoingElection() bool {
+	for nodeId := range(o.Nodes) {
+		if o.Nodes[nodeId].electionLock.TryLock() {
+			o.Nodes[nodeId].electionLock.Unlock()
+			return true
+		}
+	}
+	return false
+}
+
+func (o *Orchestrator) BlockTillElectionStart(maxPolls int, pollTick time.Duration) error {
+	polls := 0
+	for polls < maxPolls {
+		if !o.HasOngoingElection() {
+			time.Sleep(pollTick)
+			polls++
+		} else {
+			return nil
+		}
+	}
+
+	return errors.New(fmt.Sprintf("Election not settled after %d polls.", maxPolls))
+}
+
+func (o *Orchestrator) BlockTillElectionDone(maxPolls int, pollTick time.Duration) error {
+	polls := 0
+	for polls < maxPolls {
+		if o.HasOngoingElection() {
+			time.Sleep(pollTick)
+			polls++
+		} else {
+			return nil
+		}
+	}
+	return errors.New(fmt.Sprintf("Election not settled after %d polls.", maxPolls))
+}
+
+/**
+  VALUE FUNCTIONS
+  These check the data of nodes, or update it.
+ */
 
 func (o *Orchestrator) GetValues() map[NodeId]string {
 	coordValues := make(map[NodeId]string)
@@ -64,6 +123,7 @@ func (o *Orchestrator) GetValue() (string, error) {
 			} else {
 				// we're at the first live node
 				value = nodeValue
+				readFirstLiveNode = true
 			}
 		}
 	}
@@ -79,61 +139,9 @@ func (o *Orchestrator) UpdateNodeValue(id NodeId, value string, force bool) {
 	}
 }
 
-func (o *Orchestrator) KillNode(id NodeId) {
-	o.Nodes[id].Kill()
-}
-
-func (o *Orchestrator) RestartNode(id NodeId) {
-	if o.Nodes[id].IsAlive {
-		panic("Tried to start an alive node")
-	}
-	o.Nodes[id].Restart()
-}
-
-func (o *Orchestrator) HasOngoingElection() bool {
-	for nodeId := range(o.Nodes) {
-		if o.Nodes[nodeId].ongoingElectionId != "" {
-			return true
-		}
-	}
-	return false
-}
-
-func (o *Orchestrator) BlockTillElectionStart(maxPolls int, pollTick time.Duration) error {
-	polls := 0
-	for polls < maxPolls {
-		if !o.HasOngoingElection() {
-			time.Sleep(pollTick)
-			polls++
-		} else {
-			break
-		}
-	}
-
-	if polls == maxPolls {
-		return errors.New(fmt.Sprintf("Election not settled after %d polls.", maxPolls))
-	}
-
-	return nil
-}
-
-func (o *Orchestrator) BlockTillElectionDone(maxPolls int, pollTick time.Duration) error {
-	polls := 0
-	for polls < maxPolls {
-		if o.HasOngoingElection() {
-			time.Sleep(pollTick)
-			polls++
-		} else {
-			break
-		}
-	}
-
-	if polls == maxPolls {
-		return errors.New(fmt.Sprintf("Election not settled after %d polls.", maxPolls))
-	}
-
-	return nil
-}
+/**
+  COORDINATOR ID FUNCTIONS
+ */
 
 func (o *Orchestrator) GetCoordinatorIds() map[NodeId]NodeId {
 	coordIds := make(map[NodeId]NodeId)
@@ -148,7 +156,7 @@ func (o *Orchestrator) GetCoordinatorIds() map[NodeId]NodeId {
 }
 
 // Returns the coordinator ID after election has settled.
-// Blocks if election has not been settled, gives error after 5 seconds.
+// Blocks if election has not been settled, gives error after (maxPolls * pollTick)
 func (o *Orchestrator) GetCoordinatorId(maxPolls int, pollTick time.Duration) (NodeId, error) {
 	err := o.BlockTillElectionDone(maxPolls, pollTick)
 	if err != nil {
@@ -165,14 +173,48 @@ func (o *Orchestrator) GetCoordinatorId(maxPolls int, pollTick time.Duration) (N
 			}
 		} else {
 			coordId = nodeId
+			readFirstLiveNode = true
 		}
 	}
 
 	return coordId, nil
 }
 
+// Blocks until the coordinator is the same throughout.
+func (o *Orchestrator) BlockUntilCoordinatorConsistent(maxPolls int, pollTick time.Duration) (NodeId, error) {
+	polls := 0
+	
+	for polls < maxPolls {
+		coordId := NodeId(-1)
+		coordConsistent := true
+		
+		for _, nodeId := range(o.GetCoordinatorIds()) {
+			if nodeId != coordId {
+				if coordId == -1 {
+					coordId = nodeId
+				} else {
+					coordConsistent = false
+					break
+				}
+			}
+			
+		}
+		if coordConsistent && coordId != NodeId(-1) {
+			return coordId, nil
+		}
+
+		// Coordinator not consistent, poll again
+		polls++
+		time.Sleep(pollTick)
+	}
+
+	return NodeId(-1), errors.New("Could not resolve coordinator after polls.")
+}
+
 func (o *Orchestrator) Exit() {
 	for nodeId := range(o.Nodes) {
 		o.Nodes[nodeId].Exit()
 	}
+
+	recover()
 }

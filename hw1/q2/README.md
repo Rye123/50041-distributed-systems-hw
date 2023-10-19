@@ -7,23 +7,47 @@ The bulk of the code is in the `lib` package, which implements the Bully algorit
   - Any incoming message from another node is sent to these channels.
   
 ## Usage
-TODO
+
+For manual testing, please use `main.go`.
+
+However, the `lib/Node_test.go` file already provides most tests necessary to demonstrate handling of the cases mentioned in the question. Refer to Considerations for details.
+
+To run the tests:
+```bash
+cd ./lib
+go test -v
+```
+
+These tests could take up to 5 minutes to complete due to the number of system tests being used. To manually run a test:
+```bash
+cd ./lib
+go test -v -run [test name]
+```
+- `[test name]` would be replaced by one of the tests under Considerations (e.g. `Test_BasicInit_5Nodes`).
+
 
 ## Considerations
 The various considerations given in the question are resolved using Go tests.
 
-### Basic Initialisation Tests
+I use an `Orchestrator` class in `lib`, which automatically creates the necessary nodes and provides helper functions to manipulate the system.
+
+### Basic Initialisation Tests (`Test_BasicInit_[N]Nodes`, `N` = `[1, 5, 10, 50]`)
 1. Start up $N$ nodes, wait for election to complete.
 2. Ensure coordinator node is the node with the highest ID, $N-1$.
 
 This satisfies consideration (4.). Since our implementation has every new node start its own election by default, we have multiple goroutines starting the election process simultaneously, and we check if this results in the highest ID becoming the coordinator regardless of the number of nodes starting an election.
 
-### Basic Synchronisation Tests
+### Complex Initialisation Test (`Test_ComplexInit`)
+Here, we manually modify multiple nodes to consider themselves coordinators. Ideally, the system should fix itself once these coordinators start broadcasting -- higher ID nodes should attempt to elect themselves upon receiving a data broadcast from lower ID nodes.
+
+### Basic Synchronisation Tests (`Test_BasicSync_[N]Nodes`, `N` = `[5, 25]`)
 1. Start up $N$ nodes, wait for election to complete.
 2. Update coordinator node $N-1$ with a new value, and wait for value to be propagated (i.e. RTT + default timeout)
 3. Ensure that ALL nodes have that modified value.
 
-### Basic Crash and Reboot Tests
+We also have another test which replaces multiple nodes' values (simulating data corruption), and ensuring that the coordinator's value is the one that replaces all other values. This test is done in `Test_BasicSync_25Nodes_Corrupted`.
+
+### Basic Crash and Reboot Tests (`Test_BasicCrashAndReboot_[N]Nodes`, `N` = `[5, 25]`)
 1. Start up $N$ nodes, wait for election to complete.
 2. Shut down coordinator node, wait for re-election to complete.
 3. Ensure that the node with the next highest ID is selected (i.e. $N-2$).

@@ -40,7 +40,7 @@ func useTempLog() *tempLog {
 
 // Throws a fatal error if the coordinator ID doesn't match the expected ID.
 func assertCoordinatorId(t *testing.T, o *Orchestrator, tLog *tempLog, expectedId NodeId) {
-	coordId, err := o.GetCoordinatorId(10, time.Second)
+	coordId, err := o.BlockUntilCoordinatorConsistent(10, time.Second)
 	if err != nil {
 		tLog.Dump(t)
 		t.Fatalf("Test failed: %v", err)
@@ -113,8 +113,18 @@ func Test_BasicInit_10Nodes(t *testing.T) {
 }
 
 func Test_BasicInit_50Nodes(t *testing.T) {
+
+	
 	// Test with 50 nodes
 	tLog := useTempLog()
+	defer func(tlog *tempLog, t *testing.T) {
+		r := recover()
+		if r != nil {
+			log.Printf("Panicked.")
+			tlog.Dump(t)
+		}
+	}(tLog, t)
+	
 	o := NewOrchestrator(50, DEFAULT_SEND_INTV, DEFAULT_TIMEOUT)
 	o.Initiate()
 	o.BlockTillElectionStart(5, time.Second)
@@ -163,6 +173,8 @@ func Test_ComplexInit(t *testing.T) {
 	}
 
 	time.Sleep(DEFAULT_SEND_INTV + DEFAULT_TIMEOUT) // Max time for propagation of messages
+	o.BlockTillElectionStart(5, time.Second)
+	o.BlockTillElectionDone(5, time.Second)
 
 	// Coordinator ID should be resolved.
 	assertCoordinatorId(t, o, tLog, 24)

@@ -3,7 +3,6 @@ package lib
 import (
 	"fmt"
 	"log"
-	"math/rand"
 	"sync"
 	"time"
 )
@@ -18,8 +17,7 @@ const (
 )
 
 // A standard message sent between nodes.
-// The `Data` field contains either the data to be exchanged in a `MSG_TYPE_SYNC` message,
-// or the election ID if the message type is about an election
+// The `Data` field contains either the data to be exchanged in a `MSG_TYPE_SYNC` message
 type Message struct {
 	Type  msgType
 	SrcId NodeId
@@ -50,7 +48,6 @@ type Node struct {
 	sendIntv          time.Duration           // How often data is to be sent from the coordinator
 	timeout           time.Duration           // Estimated RTT for messages
 	vetoChan          chan Message            // Internal channel to monitor for vetoes during an election
-	ongoingElectionId string                  // Election ID of current election ("" if no election)
 	quitChan          chan bool               // Internal channels to kill goroutines
 	disableElection   bool                    // Internal control to disable this ndoe starting elections
 	electionLock      *sync.Mutex
@@ -63,8 +60,7 @@ func NewNode(id NodeId, sendInterval, timeout time.Duration, disableElection boo
 		NodeEndpoint{id, make(chan Message), make(chan Message)},
 		make(map[NodeId]NodeEndpoint, nodeCount),
 		sendInterval, timeout,
-		make(chan Message, nodeCount),
-		"", make(chan bool),
+		make(chan Message, nodeCount), make(chan bool),
 		disableElection,
 		&sync.Mutex{},
 	}
@@ -155,14 +151,17 @@ func (node *Node) HandleControl() {
 			case MSG_TYPE_ELECTION_VETO:
 				// If we receive a veto:
 				// pass it along to the StartElection if we have an ongoing election
-				if node.ongoingElectionId == "" {
+
+				if node.electionLock.TryLock() {
+					// Here, managed to acquire lock -- so we don't have an election going on
+					node.electionLock.Unlock()
 					continue
 				}
+
+				// Otherwise, we DO have an election going on
 				
-				if msg.Data == node.ongoingElectionId {
-					log.Printf("N%d: Received ELECTION_VETO from N%d.", node.Id, msg.SrcId)
-					node.vetoChan <- msg
-				}
+				log.Printf("N%d: Received ELECTION_VETO from N%d.", node.Id, msg.SrcId)
+				node.vetoChan <- msg
 			case MSG_TYPE_ELECTION_WIN:
 				// If another node declares it has won...
 				log.Printf("N%d: Received ELECTION_WIN from N%d.", node.Id, msg.SrcId)
@@ -238,10 +237,6 @@ func (node *Node) StartElection() {
 	}
 
 	// Prevent a node from starting an election if it has already started one.
-	if node.ongoingElectionId != "" {
-		return
-	}
-
 	// We use TryLock here because we really don't have to re-acquire the lock to start an election if we already started an election
 	if !node.electionLock.TryLock() {
 		return
@@ -249,15 +244,13 @@ func (node *Node) StartElection() {
 
 	// Acquired the lock, start a goroutine to manage the election while we continue on
 	go func() {
-		node.ongoingElectionId = fmt.Sprintf("EL%d", rand.Int()) // Random election ID
-		log.Printf("N%d: Starting election with ID: %v", node.Id, node.ongoingElectionId)
+		log.Printf("N%d: Starting election", node.Id)
 
 		defer func() {
 			// Election is over, clear election veto channel
 			for len(node.vetoChan) > 0 {
 				<-node.vetoChan
 			}
-			node.ongoingElectionId = ""
 			node.electionLock.Unlock()
 		}()
 
@@ -268,7 +261,7 @@ func (node *Node) StartElection() {
 			if nodeId <= node.Id {
 				continue
 			}
-			node.send(MSG_TYPE_ELECTION_START, node.endpoints[nodeId], node.ongoingElectionId)
+			node.send(MSG_TYPE_ELECTION_START, node.endpoints[nodeId], "")
 		}
 
 		// Watch for timeout or vetoes
@@ -282,9 +275,9 @@ func (node *Node) StartElection() {
 
 		// Announcement Stage
 		if veto {
-			log.Printf("N%d: Lost election %s.", node.Id, node.ongoingElectionId)
+			log.Printf("N%d: Lost election.", node.Id)
 		} else {
-			log.Printf("N%d: Won election %s.", node.Id, node.ongoingElectionId)
+			log.Printf("N%d: Won election.", node.Id)
 
 			node.CoordinatorId = node.Id
 			for nodeId := range node.endpoints {
@@ -294,7 +287,7 @@ func (node *Node) StartElection() {
 				node.send(
 					MSG_TYPE_ELECTION_WIN,
 					node.endpoints[nodeId],
-					node.ongoingElectionId,
+					"",
 				)
 			}
 		}
