@@ -123,6 +123,81 @@ func Test_BasicCrashAndReboot_DEMO(t *testing.T) {
 	systemPrint(fmt.Sprintf("Re-election complete with coordinator N%d.", coordId))
 }
 
+func Test_DurabilityCrashAndReboot_DEMO(t *testing.T) {
+	if testing.Short() {
+		t.Skip("DEMO DurabilityCrashAndRebootTest skipped in short mode.")
+	}
+
+	// Initialise with DEMO_NODECOUNT nodes
+	systemPrint("Running DurabilityCrashAndReboot with 25 nodes.")
+	o := NewOrchestrator(25, DEMO_SEND_INTV, DEMO_TIMEOUT)
+	defer o.Exit()
+
+	o.Initiate()
+	o.BlockTillElectionStart(5, time.Second)
+	o.BlockTillElectionDone(5, time.Second)
+
+	// Detect coordinator
+	coordId, err := o.BlockUntilCoordinatorConsistent(10, time.Second)
+	if err != nil {
+		log.Fatalf("Unexpected error: %v", err)
+	}
+	systemPrint(fmt.Sprintf("Election complete with coordinator N%d.", coordId))
+
+	// Killing of nodes
+	systemPrint("Killing off nodes: N24, N22, N21, N19, N18, N15, N13, N10, N7, N5...")
+	o.KillNode(24)
+	o.KillNode(22)
+	o.KillNode(21)
+	o.KillNode(19)
+	o.KillNode(18)
+	o.KillNode(15)
+	o.KillNode(13)
+	o.KillNode(10)
+	o.KillNode(7)
+	o.KillNode(5)
+	systemPrint("Nodes killed. Blocking till re-election is done.")
+	time.Sleep(DEFAULT_TIMEOUT/2 + DEFAULT_SEND_INTV) // Wait for nodes to detect
+	o.BlockTillElectionStart(5, time.Second)
+	o.BlockTillElectionDone(5, time.Second)
+
+	// Detect coordinator
+	newCoordId, err := o.BlockUntilCoordinatorConsistent(10, time.Second)
+	if err != nil {
+		log.Fatalf("Unexpected error: %v", err)
+	}
+	systemPrint(fmt.Sprintf("Re-election complete with coordinator N%d.", newCoordId))
+
+	// More kills
+	systemPrint("Killing off nodes: N23, N20...")
+	o.KillNode(23)
+	o.KillNode(20)
+	systemPrint("Nodes killed. Blocking till re-election is done.")
+	time.Sleep(DEFAULT_TIMEOUT/2 + DEFAULT_SEND_INTV) // Wait for nodes to detect
+	o.BlockTillElectionStart(5, time.Second)
+	o.BlockTillElectionDone(5, time.Second)
+
+	// Detect coordinator
+	newCoordId, err = o.BlockUntilCoordinatorConsistent(10, time.Second)
+	if err != nil {
+		log.Fatalf("Unexpected error: %v", err)
+	}
+	systemPrint(fmt.Sprintf("Re-election complete with coordinator N%d.", newCoordId))
+
+	// Reboot
+	systemPrint("Rebooting N22...")
+	o.RestartNode(22)
+	o.BlockTillElectionStart(5, time.Second)
+	o.BlockTillElectionDone(5, time.Second)
+
+	// Detect coordinator
+	newCoordId, err = o.BlockUntilCoordinatorConsistent(10, time.Second)
+	if err != nil {
+		log.Fatalf("Unexpected error: %v", err)
+	}
+	systemPrint(fmt.Sprintf("Re-election complete with coordinator N%d.", newCoordId))
+}
+
 func Test_NonCoordCrashDuringElection_DEMO(t *testing.T) {
 	if testing.Short() {
 		t.Skip("DEMO NonCoordCrashDuringElection Test skipped in short mode.")
