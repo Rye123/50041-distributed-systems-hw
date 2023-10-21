@@ -12,6 +12,8 @@ The bulk of the code is in the `lib` package, which implements the Bully algorit
   
 ## Usage
 
+Note: All of the following commands assume you are in the same directory as this `README.md` file (`hw1/q2`).
+
 ### Grading
 
 The `Demo_test.go` file contains most of the proofs necessary to show that my code addresses the necessary considerations mentioned in the question. Skip to **Considerations** to see how to run each test.
