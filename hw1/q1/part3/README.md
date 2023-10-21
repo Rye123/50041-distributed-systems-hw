@@ -13,9 +13,10 @@ This command assumes you are in the same directory as this `README.md` file (`hw
 go run main.go
 ```
 
-To safely exit, press `ENTER`. As with part 2, this would also trigger every registered client to print out the **total order of the received messages**.
+**To safely exit, press `ENTER`**. As with part 2, this would also trigger every registered client to print out the **total order of the received messages**.
 - In other words, every client should have the same order of messages (excluding the messages they themselves sent).
 - This total order is determined by the vector clock timestamp of each message.
+- If `CTRL-C` is used, this may not actually print out the total order.
 
 ### Organisation
 The code is largely the same as in Part 2.
