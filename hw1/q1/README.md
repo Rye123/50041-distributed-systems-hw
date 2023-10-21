@@ -1,6 +1,9 @@
-# PSET1 Q1
+# PSET1 Question 1
 
-Each separate part, along with its README, is stored in its respective directory.
-- [Part 1](./part1/README.md)
-- [Part 2](./part2/README.md)
-- [Part 3](./part3/README.md)
+**Name**: Ryan Toh
+**Student ID**: 1005129
+
+The respective READMEs for each separate part are stored in their respective directories:
+- [Part 1 (Simulated Client-Server)](./part1/README.md)
+- [Part 2 (Lamport Clocks)](./part2/README.md)
+- [Part 3 (Vector Clocks)](./part3/README.md)
