@@ -12,6 +12,21 @@ The bulk of the code is in the `lib` package, which implements the Bully algorit
   
 ## Usage
 
+### Grading
+
+The `Demo_test.go` file contains most of the proofs necessary to show that my code addresses the necessary considerations mentioned in the question. Skip to **Considerations** to see how to run each test.
+
+These tests use 10 nodes by default, however this can be changed in `DEMO_NODECOUNT` (at the cost of much more output messages).
+
+In general, the convention is:
+```bash
+go test ./lib -v -run Test_[Test Name]_DEMO
+```
+
+Refer to **Considerations** for how to run each specific test.
+
+### Manual Testing
+
 For manual testing, please use `main.go`. Currently, it runs the system with 10 nodes, and randomly does one of the following actions every few seconds:
 - Updates the coordinator with a new value.
 - Randomly selects a node -- if it is alive, kill it; otherwise, revive it.
@@ -21,9 +36,7 @@ For manual testing, please use `main.go`. Currently, it runs the system with 10 
 go run main.go
 ```
 
-However, the `lib/Node_test.go` file already provides most tests necessary to demonstrate handling of the cases mentioned in the question. Refer to Considerations for details.
-
-To run the tests:
+Alternatively, for general testing (without the log output printed in `Demo_test.go`), run:
 ```bash
 go test ./lib -v -short
 ```
@@ -31,12 +44,7 @@ go test ./lib -v -short
 This would skip the tests in the `Demo_test.go` file, which are for demonstrations.
 - It isn't recommended to remove the `short` flag, as the `Demo_test.go` tests print output regardless of whether or not the test is successful, making the output more lengthy.
 
-Running all the tests could take up to 5 minutes to complete due to the number of system tests being used. Instead, I recommend manually running the tests in the `Demo_test.go` file, each of which are specified under the Considerations section. These tests use 10 nodes by default, however this can be changed in `DEMO_NODECOUNT` (at the cost of much more output messages).
-
-In general, the convention is:
-```bash
-go test ./lib -v -run Test_[Test Name]_DEMO
-```
+Running all the tests could take up to 5 minutes to complete due to the number of system tests being used. Hence, I recommend manually running the tests in the `Demo_test.go` file, each of which are specified under the Considerations section. 
 
 ## Considerations
 The various considerations given in the question are resolved using Go tests. Here, I list out most of the tests, along with the respective consideration resolved.
@@ -52,7 +60,7 @@ For reference, here are the considerations:
 
 I use an `Orchestrator` class in `lib`, which automatically creates the necessary nodes and provides helper functions to manipulate the system.
 
-### Basic Initialisation Tests (`Test_BasicInit_[N]Nodes`, `N` = `[1, 5, 10, 50]`)
+### Basic Initialisation Tests
 1. Start up $N$ nodes, wait for election to complete.
 2. Ensure coordinator node is the node with the highest ID, $N-1$.
 
@@ -61,16 +69,19 @@ This satisfies **consideration 4**. Our implementation has *every* new node star
 This also partially satisfies **consideration 1**, by handling a basic election. The detection of a failed coordinator is later shown in the Basic Crash and Reboot Tests.
 
 Finally, this also satisfies the *worst case* of the Bully Algorithm (hence satisfying part of **consideration 2**). In the worst case, *every node* detects that the coordinator has failed and begins their own election. In our implementation, every node starts an election upon joining, which simulates this worst case.
+- For the textbook worst case and best case, refer to the **Miscellaneous Tests** below.
 
 To directly test this:
 ```bash
 go test ./lib -v -run Test_BasicInit_DEMO
 ```
 
-### Complex Initialisation Test (`Test_ComplexInit`)
-Here, we manually modify multiple nodes to consider themselves coordinators. Ideally, the system should fix itself once these coordinators start broadcasting -- higher ID nodes should attempt to elect themselves upon receiving a data broadcast from lower ID nodes.
+All nodes should begin elections upon initialisation, before the node with the highest ID wins.
 
-### Basic Synchronisation Tests (`Test_BasicSync_[N]Nodes`, `N` = `[5, 25]`)
+### Complex Initialisation Test
+Here, we manually modify multiple nodes to consider themselves coordinators. Ideally, the system should fix itself once these coordinators start broadcasting -- higher ID nodes should attempt to elect themselves upon receiving a data broadcast from lower ID nodes. 
+
+### Basic Synchronisation Tests
 1. Start up $N$ nodes, wait for election to complete.
 2. Update coordinator node $N-1$ with a new value, and wait for value to be propagated (i.e. RTT + default timeout)
 3. Ensure that ALL nodes have that modified value.
@@ -84,7 +95,9 @@ To directly test this:
 go test ./lib -v -run Test_BasicSync_DEMO
 ```
 
-### Basic Crash and Reboot Tests (`Test_BasicCrashAndReboot_[N]Nodes`, `N` = `[5, 25]`)
+There will first be an election. Then, the system will update the value of the coordinator, and after this update, the system will report the values of each node (showing that the value is propagated as expected).
+
+### Basic Crash and Reboot Tests
 1. Start up $N$ nodes, wait for election to complete.
 2. Shut down coordinator node, wait for re-election to complete.
 3. Ensure that the node with the next highest ID is selected (i.e. $N-2$).
@@ -100,12 +113,23 @@ To directly test this:
 go test ./lib -v -run Test_BasicCrashAndReboot_DEMO
 ```
 
-### Durability Crash and Reboot Tests (`Test_Durability_CrashAndReboot_25Nodes`)
+There will first be an election. After this election, the system will kill the coordinator. The subsequent re-election should pick the second-highest ID. Subsequently, the system will reboot the original coordinator, who should be re-elected.
+
+### Durability Crash and Reboot Tests
 This test kills off several nodes, ensuring that the correct coordinator is selected. This ensures the durability of the system despite multiple crashes and reboots.
 
 Since we have several nodes that are **not** coordinators that are "silently leaving" the network, we fulfill the other part of **consideration (5.)** -- nodes that are not the coordinator that silently leave simply don't get updates, and can rejoin when necessary.
 
-### Non-Coordinator Crash During Election (`Test_NonCoordCrashDuringElection_25Nodes`)
+To directly test this:
+```bash
+go test ./lib -v -run Test_DurabilityCrashAndReboot_DEMO
+```
+
+This will kill off several nodes and report the new coordinator. Subsequently, it kills off 2 more, reporting the *new* coordinator. 
+
+Finally, it reboots a higher ID node, which should become the newly-elected coordinator. Note that this uses a hardcoded 25 nodes, as dynamically adjusting the nodes to be killed based on `DEMO_NODECOUNT` was considered to be out of scope of the assignment.
+
+### Non-Coordinator Crash During Election
 This test kills off a non-coordinator node during the election, and reboots it later. The non-coordinator node should start an election, and proceed to get bullied into accepting the coordinator.
 
 This satisfies **consideration 3b**, where a non-coordinator node fails during election.
@@ -114,6 +138,8 @@ To directly test this:
 ```bash
 go test ./lib -v -run Test_NonCoordCrashDuringElection_DEMO
 ```
+
+This will start an election. After that, the coordinator is killed. During the subsequent election, one of the non-coordinators is killed -- hence it won't receive the announcement message. Subsequently it is rebooted, and starts its own election before accepting 'defeat'.
 
 ### Partial Announcement Tests
 Here, we simulate the case where a newly-elected coordinator fails before announcing to all nodes.
@@ -126,16 +152,18 @@ We manually set the coordinators of the nodes:
 
 Finally, we initialise the system (having already set the coordinators). The nodes should detect the failed coordinators and adjust to the next best coordinator accordingly.
 
-To directly test this:
-```bash
-go test ./lib -v -run Test_PartialAnnouncement_DEMO
-```
-
 This test satisfies **consideration 3a**. The newly elected coordinator fails during the announcement stage such that some nodes receive the information about the new coordinator, but others did not.
 
 Note that this simulated approach also applies for the case where a newly-awakened node that becomes the newly-elected coordinator fails during the announcement phase.
 
 In both cases, the nodes in the system would have differing coordinator IDs. This is resolved after a new election initialised by any of the nodes that detect the failure of their coordinator.
+
+To directly test this:
+```bash
+go test ./lib -v -run Test_PartialAnnouncement_DEMO
+```
+
+This will create the above simulated scenario, and result in the third-highest ID winning.
 
 ### Synchronisation, Crash and Reboot Tests
 1. Start up $N$ nodes, and update the coordinator node with a new value. Ensure value is propagated through the system.
