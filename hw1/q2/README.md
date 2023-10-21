@@ -1,4 +1,4 @@
-# PSET1 Q2
+# PSET1 Question 2
 
 The bulk of the code is in the `lib` package, which implements the Bully algorithm among $N$ nodes that synchronise a string value using Go channels.
 - Each node runs concurrently, using goroutines.
