@@ -6,6 +6,8 @@ Simulate the behaviour of both server and clients via Goroutines.
 
 ## Solution
 ### Usage
+This command assumes you are in the same directory as this `README.md` file (`hw1/q1/part1`).
+
 ```bash
 go run main.go
 ```
