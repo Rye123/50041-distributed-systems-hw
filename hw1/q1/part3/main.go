@@ -2,7 +2,7 @@ package main
 
 import (
 	"fmt"
-	"github.com/Rye123/50041-distributed-systems-hw/hw1/q1/part3/lib"
+	"1005129_RYAN_TOH/hw1/q1/part3/lib"
 	"math/rand"
 	"sync"
 )

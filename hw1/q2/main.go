@@ -6,8 +6,7 @@ import (
 	"math/rand"
 	"sync"
 	"time"
-
-	"github.com/Rye123/50041-distributed-systems-hw/hw1/q2/lib"
+	"1005129_RYAN_TOH/hw1/q2/lib"
 )
 
 const DEFAULT_SEND_INTV = 5 * time.Second
