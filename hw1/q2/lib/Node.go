@@ -40,28 +40,28 @@ type NodeEndpoint struct {
 
 // A node in the system.
 type Node struct {
-	Id, CoordinatorId NodeId
-	Data              string                  // The data structure to be synchronised.
-	IsAlive           bool                    // Simulated liveness to simulate a fault.
-	Endpoint          NodeEndpoint            // This node's endpoint
-	endpoints         map[NodeId]NodeEndpoint // Maps a node ID to their endpoint
-	sendIntv          time.Duration           // How often data is to be sent from the coordinator
-	timeout           time.Duration           // Estimated RTT for messages
-	vetoChan          chan Message            // Internal channel to monitor for vetoes during an election
-	quitChan          chan bool               // Internal channels to kill goroutines
-	disableElection   bool                    // Internal control to disable this ndoe starting elections
-	electionLock      *sync.Mutex
+	Id, CoordinatorId      NodeId
+	Data                   string                  // The data structure to be synchronised.
+	IsAlive                bool                    // Simulated liveness to simulate a fault.
+	Endpoint               NodeEndpoint            // This node's endpoint
+	endpoints              map[NodeId]NodeEndpoint // Maps a node ID to their endpoint
+	sendIntv               time.Duration           // How often data is to be sent from the coordinator
+	timeout                time.Duration           // Estimated RTT for messages
+	vetoChan               chan Message            // Internal channel to monitor for vetoes during an election
+	quitChan               chan bool               // Internal channels to kill goroutines
+	disableDetectDeadCoord bool
+	electionLock           *sync.Mutex
 }
 
 // Creates a new node.
-func NewNode(id NodeId, sendInterval, timeout time.Duration, disableElection bool, nodeCount int) *Node {
+func NewNode(id NodeId, sendInterval, timeout time.Duration, disableDetectDeadCoord bool, nodeCount int) *Node {
 	return &Node{
 		id, -1, "", true,
 		NodeEndpoint{id, make(chan Message), make(chan Message)},
 		make(map[NodeId]NodeEndpoint, nodeCount),
 		sendInterval, timeout,
 		make(chan Message, nodeCount), make(chan bool),
-		disableElection,
+		disableDetectDeadCoord,
 		&sync.Mutex{},
 	}
 }
@@ -80,6 +80,9 @@ func (node *Node) Initialise(endpoints []NodeEndpoint) {
 	go node.HandleData()
 	go node.SyncData()
 
+	if !node.IsAlive {
+		return
+	}
 	node.StartElection() // Start election upon initialisation
 }
 
@@ -103,7 +106,7 @@ func (node *Node) SyncData() {
 				node.send(MSG_TYPE_SYNC, node.endpoints[nodeId], node.Data)
 			}
 		case <-node.quitChan:
-			log.Printf("N%d: Shutting down SyncData.", node.Id)
+			// log.Printf("N%d: Shutting down SyncData.", node.Id)
 			return
 		}
 	}
@@ -115,7 +118,7 @@ func (node *Node) HandleControl() {
 		select {
 		case msg, ok := <-node.Endpoint.ControlChan:
 			if !ok {
-				log.Printf("N%d: ControlChan closed, shutting down HandleControl", node.Id)
+				// log.Printf("N%d: ControlChan closed, shutting down HandleControl", node.Id)
 				return
 			}
 
@@ -129,7 +132,7 @@ func (node *Node) HandleControl() {
 
 			// Drop message if dead
 			if !node.IsAlive {
-				log.Printf("N%d: Dropped incoming message from %d, node is dead.", node.Id, msg.SrcId)
+				// log.Printf("N%d: Dropped incoming message from %d, node is dead.", node.Id, msg.SrcId)
 				continue
 			}
 
@@ -159,7 +162,7 @@ func (node *Node) HandleControl() {
 				}
 
 				// Otherwise, we DO have an election going on
-				
+
 				log.Printf("N%d: Received ELECTION_VETO from N%d.", node.Id, msg.SrcId)
 				node.vetoChan <- msg
 			case MSG_TYPE_ELECTION_WIN:
@@ -174,7 +177,7 @@ func (node *Node) HandleControl() {
 				}
 			}
 		case <-node.quitChan:
-			log.Printf("N%d: Shutting down HandleControl.", node.Id)
+			// log.Printf("N%d: Shutting down HandleControl.", node.Id)
 			return
 		}
 	}
@@ -192,7 +195,7 @@ func (node *Node) HandleData() {
 		select {
 		case msg, ok := <-node.Endpoint.DataChan:
 			if !ok {
-				log.Printf("N%d: DataChan closed, shutting down HandleData", node.Id)
+				// log.Printf("N%d: DataChan closed, shutting down HandleData", node.Id)
 				return
 			}
 
@@ -216,7 +219,7 @@ func (node *Node) HandleData() {
 			log.Printf("N%d: Received SYNC from N%d: %v", node.Id, msg.SrcId, msg.Data)
 			node.Data = msg.Data
 		case <-time.After(node.sendIntv + (node.timeout / 2)):
-			if node.disableElection || node.Id == node.CoordinatorId || !node.IsAlive {
+			if node.disableDetectDeadCoord || node.Id == node.CoordinatorId || !node.IsAlive {
 				continue
 			}
 
@@ -224,7 +227,7 @@ func (node *Node) HandleData() {
 			log.Printf("N%d: Detected coordinator is down.", node.Id)
 			node.StartElection()
 		case <-node.quitChan:
-			log.Printf("N%d: Shutting down HandleData", node.Id)
+			// log.Printf("N%d: Shutting down HandleData", node.Id)
 			return
 		}
 	}
@@ -232,10 +235,6 @@ func (node *Node) HandleData() {
 
 // Initiate an election
 func (node *Node) StartElection() {
-	if node.disableElection {
-		return
-	}
-
 	// Prevent a node from starting an election if it has already started one.
 	// We use TryLock here because we really don't have to re-acquire the lock to start an election if we already started an election
 	if !node.electionLock.TryLock() {
@@ -294,6 +293,16 @@ func (node *Node) StartElection() {
 	}()
 }
 
+func (node *Node) DisableDeadCoordDetection() {
+	node.disableDetectDeadCoord = true
+	log.Printf("N%d: Disabled detection of dead coordinator.", node.Id)
+}
+
+func (node *Node) EnableElections() {
+	node.disableDetectDeadCoord = false
+	log.Printf("N%d: Enabled detection of dead coordinator.", node.Id)
+}
+
 // Manual update of data
 func (node *Node) PushUpdate(data string) {
 	if node.Id != node.CoordinatorId {
@@ -338,8 +347,6 @@ func (node *Node) Restart() {
 
 // Actual teardown of this node.
 func (node *Node) Exit() {
-	node.disableElection = true // Disable just to prevent additional messages
-
 	// Since the above goroutines don't check for quit if they're 'not alive', make them alive
 	node.IsAlive = true
 
@@ -347,4 +354,5 @@ func (node *Node) Exit() {
 	for i := 0; i < 3; i++ {
 		node.quitChan <- true
 	}
+	log.Printf("N%d: EXIT", node.Id)
 }

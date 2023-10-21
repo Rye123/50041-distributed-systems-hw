@@ -2,6 +2,9 @@ package main
 
 import (
 	"fmt"
+	"log"
+	"math/rand"
+	"sync"
 	"time"
 
 	"github.com/Rye123/50041-distributed-systems-hw/hw1/q2/lib"
@@ -10,49 +13,84 @@ import (
 const DEFAULT_SEND_INTV = 5 * time.Second
 const DEFAULT_TIMEOUT = 1 * time.Second
 
-func main() {
-	fmt.Println("Initialising")
-	nodes := [](*lib.Node){
-		lib.NewNode(0, DEFAULT_SEND_INTV, DEFAULT_TIMEOUT, false),
-		lib.NewNode(1, DEFAULT_SEND_INTV, DEFAULT_TIMEOUT, false),
-		lib.NewNode(2, DEFAULT_SEND_INTV, DEFAULT_TIMEOUT, false),
-		lib.NewNode(3, DEFAULT_SEND_INTV, DEFAULT_TIMEOUT, false),
-		lib.NewNode(4, DEFAULT_SEND_INTV, DEFAULT_TIMEOUT, false),
-		lib.NewNode(5, DEFAULT_SEND_INTV, DEFAULT_TIMEOUT, false),
+func InitNodes(nodeCount int) [](*lib.Node) {
+	log.Printf("SYSTEM: Initialising with %d nodes", nodeCount)
+	nodes := make([](*lib.Node), 0)
+
+	for i := 0; i < nodeCount; i++ {
+		nodeId := lib.NodeId(i)
+		nodes = append(nodes, lib.NewNode(nodeId, DEFAULT_SEND_INTV, DEFAULT_TIMEOUT, false, nodeCount))
 	}
 
+	// Get endpoints of each node
 	endpoints := make([]lib.NodeEndpoint, 0)
-	for _, node := range(nodes) {
+	for _, node := range nodes {
 		endpoints = append(endpoints, node.Endpoint)
 	}
-	
-	// Initialise nodes
-	for _, node := range(nodes) {
+
+	// Initialise nodes with endpoints
+	for _, node := range nodes {
 		go node.Initialise(endpoints)
 	}
+	return nodes
+}
 
-	defer func() {
-		for _, node := range(nodes) {
-			go node.Exit()
+func CleanupNodes(nodes [](*lib.Node)) {
+	log.Printf("SYSTEM: Cleaning up nodes...")
+	var exitWg sync.WaitGroup
+
+	for _, node := range nodes {
+		exitWg.Add(1)
+		go func(n *lib.Node) {
+			defer exitWg.Done()
+			n.Exit()
+		}(node)
+	}
+	log.Printf("SYSTEM: Node cleanup complete.")
+}
+
+func main() {
+	nodes := InitNodes(10)
+	defer CleanupNodes(nodes)
+	counter := 0
+
+	for {
+		// Perform a random action
+		randInt := rand.Int31n(4)
+		fmt.Printf("\n---\n\n")
+		switch randInt {
+		case 0:
+			// Update node value
+			for i := len(nodes) - 1; i > 0; i-- {
+				if nodes[i].IsAlive {
+					value := fmt.Sprintf("Msg%d", counter)
+					counter++
+					fmt.Printf("SYSTEM: Updating N%d with value %v\n", nodes[i].Id, value)
+					nodes[i].PushUpdate(value)
+					break
+				}
+			}
+		case 1, 2:
+			// Kill or reboot random node
+			randNodeId := lib.NodeId(rand.Int31n(int32(len(nodes))))
+			if nodes[randNodeId].IsAlive {
+				fmt.Printf("SYSTEM: Killing N%d.\n", randNodeId)
+				nodes[randNodeId].Kill()
+			} else {
+				fmt.Printf("SYSTEM: Rebooting N%d.\n", randNodeId)
+				nodes[randNodeId].Restart()
+			}
+		case 3:
+			// Kill coordinator
+			for i := len(nodes) - 1; i > 0; i-- {
+				if nodes[i].IsAlive {
+					fmt.Printf("SYSTEM: Killing N%d.\n", nodes[i].Id)
+					nodes[i].Kill()
+					break
+				}
+			}
 		}
-	}()
-	
-	fmt.Println("All nodes initialised.")
-
-	// Simulate updating of data
-	str := "asdf"
-	time.Sleep(5 * time.Second)
-	nodes[5].PushUpdate(str)
-
-	fmt.Println("Press ENTER to trigger killing of node 5")
-
-	fmt.Scanf("%d")
-	nodes[5].Kill()
-	
-	fmt.Println("Killed. Press ENTER to trigger restart of node 5")
-	fmt.Scanf("%d")
-	nodes[5].Restart()
-
-	fmt.Println("Restarted. Press ENTER to stop.")
-	fmt.Scanf("%d")
+		fmt.Printf("\n---\n")
+		time.Sleep(DEFAULT_SEND_INTV + DEFAULT_TIMEOUT)
+	}
 }

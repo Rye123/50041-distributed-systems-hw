@@ -32,15 +32,15 @@ func (o *Orchestrator) RestartNode(id NodeId) {
 	o.Nodes[id].Restart()
 }
 
-// Initialise system, returns only after election completed
+// Initialise system,
 func (o *Orchestrator) Initiate() {
 	endpoints := make([]NodeEndpoint, 0)
-	for nodeId := range(o.Nodes) {
+	for nodeId := range o.Nodes {
 		endpoints = append(endpoints, o.Nodes[nodeId].Endpoint)
 	}
-	
+
 	// Initialise nodes
-	for nodeId := range(o.Nodes) {
+	for nodeId := range o.Nodes {
 		go o.Nodes[nodeId].Initialise(endpoints)
 	}
 }
@@ -48,11 +48,11 @@ func (o *Orchestrator) Initiate() {
 /**
   ELECTION FUNCTIONS
   These check for when an election has started/concluded.
- */
+*/
 
 // We try to acquire all the locks
 func (o *Orchestrator) HasOngoingElection() bool {
-	for nodeId := range(o.Nodes) {
+	for nodeId := range o.Nodes {
 		if o.Nodes[nodeId].electionLock.TryLock() {
 			o.Nodes[nodeId].electionLock.Unlock()
 			return true
@@ -91,11 +91,11 @@ func (o *Orchestrator) BlockTillElectionDone(maxPolls int, pollTick time.Duratio
 /**
   VALUE FUNCTIONS
   These check the data of nodes, or update it.
- */
+*/
 
 func (o *Orchestrator) GetValues() map[NodeId]string {
 	coordValues := make(map[NodeId]string)
-	for nodeId := range(o.Nodes) {
+	for nodeId := range o.Nodes {
 		// Check first if the node is actually alive, since dead nodes won't be updated
 		if !o.Nodes[nodeId].IsAlive {
 			continue
@@ -110,11 +110,11 @@ func (o *Orchestrator) GetValue() (string, error) {
 	if len(o.Nodes) == 0 {
 		panic("No nodes to get value from")
 	}
-	
+
 	value := ""
 	readFirstLiveNode := false
-	
-	for _, nodeValue := range(o.GetValues()) {
+
+	for _, nodeValue := range o.GetValues() {
 		if value != nodeValue {
 			// either we're at the first live node, or value is different
 			if readFirstLiveNode {
@@ -141,11 +141,11 @@ func (o *Orchestrator) UpdateNodeValue(id NodeId, value string, force bool) {
 
 /**
   COORDINATOR ID FUNCTIONS
- */
+*/
 
 func (o *Orchestrator) GetCoordinatorIds() map[NodeId]NodeId {
 	coordIds := make(map[NodeId]NodeId)
-	for nodeId := range(o.Nodes) {
+	for nodeId := range o.Nodes {
 		// Check first if the node is actually alive, since we set the coordinator ID of dead nodes to be -1
 		if !o.Nodes[nodeId].IsAlive {
 			continue
@@ -162,11 +162,11 @@ func (o *Orchestrator) GetCoordinatorId(maxPolls int, pollTick time.Duration) (N
 	if err != nil {
 		return -1, errors.New("Election not settled.")
 	}
-	
+
 	// Ensure coordId is the same
 	coordId := NodeId(-1)
 	readFirstLiveNode := false
-	for i, nodeId := range(o.GetCoordinatorIds()) {
+	for i, nodeId := range o.GetCoordinatorIds() {
 		if readFirstLiveNode {
 			if nodeId != coordId {
 				return -1, errors.New(fmt.Sprintf("Election settled, but no single coordinatorId (Has C%d (from N%d) and N%d.", nodeId, i, coordId))
@@ -183,12 +183,12 @@ func (o *Orchestrator) GetCoordinatorId(maxPolls int, pollTick time.Duration) (N
 // Blocks until the coordinator is the same throughout.
 func (o *Orchestrator) BlockUntilCoordinatorConsistent(maxPolls int, pollTick time.Duration) (NodeId, error) {
 	polls := 0
-	
+
 	for polls < maxPolls {
 		coordId := NodeId(-1)
 		coordConsistent := true
-		
-		for _, nodeId := range(o.GetCoordinatorIds()) {
+
+		for _, nodeId := range o.GetCoordinatorIds() {
 			if nodeId != coordId {
 				if coordId == -1 {
 					coordId = nodeId
@@ -197,7 +197,7 @@ func (o *Orchestrator) BlockUntilCoordinatorConsistent(maxPolls int, pollTick ti
 					break
 				}
 			}
-			
+
 		}
 		if coordConsistent && coordId != NodeId(-1) {
 			return coordId, nil
@@ -212,7 +212,7 @@ func (o *Orchestrator) BlockUntilCoordinatorConsistent(maxPolls int, pollTick ti
 }
 
 func (o *Orchestrator) Exit() {
-	for nodeId := range(o.Nodes) {
+	for nodeId := range o.Nodes {
 		o.Nodes[nodeId].Exit()
 	}
 
