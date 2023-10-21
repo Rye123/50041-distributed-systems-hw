@@ -6,6 +6,9 @@ Use Vector clock to redo the assignment. Implement the detection of causality vi
 
 ## Solution
 ### Usage
+
+This command assumes you are in the same directory as this `README.md` file (`hw1/q1/part1`).
+
 ```bash
 go run main.go
 ```
