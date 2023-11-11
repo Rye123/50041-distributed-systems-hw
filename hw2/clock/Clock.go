@@ -17,6 +17,10 @@ func NewClockVal(nodeIds []int) ClockVal {
 	return ClockVal{values}
 }
 
+func ManualClock(values map[int]int) ClockVal {
+	return ClockVal{values}
+}
+
 // Returns:
 // - 0  if both clock values are CONCURRENT (i.e. equal or neither gt/lt)
 // - 1  if c1 is STRICTLY > c2
