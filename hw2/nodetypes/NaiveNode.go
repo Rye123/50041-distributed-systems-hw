@@ -14,6 +14,10 @@ func NewNaiveNode(nodeId int, nodeIds []int, sm *SharedMemory) *NaiveNode {
 	return &NaiveNode{nodeId, clock.NewClockVal(nodeIds), sm}
 }
 
+func (n *NaiveNode) Init() {
+	
+}
+
 func (n *NaiveNode) AcquireLock() {
 	n.clock = n.clock.Increment(n.nodeId, 1)
 	n.smPtr.EnterCS(n.nodeId, n.clock.Clone())

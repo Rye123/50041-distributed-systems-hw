@@ -21,14 +21,22 @@ func NewOrchestrator(nodes map[int](nodetypes.Node), sm *nodetypes.SharedMemory)
 	}
 }
 
+func (o *Orchestrator) Init() (err error) {
+	for _, n := range o.nodes {
+		n.Init()
+	}
+	return nil
+}
+
 func (o *Orchestrator) NodeEnter(nodeId int) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			err = errors.New(fmt.Sprintf("%v", r))
 		}
 	}()
-	log.Printf("N%d: Enter CS", nodeId)
+	log.Printf("N%d: Request to enter CS", nodeId)
 	o.nodes[nodeId].AcquireLock()
+	log.Printf("N%d: Entered CS", nodeId)
 	return nil
 }
 

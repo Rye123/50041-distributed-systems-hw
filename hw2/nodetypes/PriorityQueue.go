@@ -58,6 +58,14 @@ func (q *pqueue) Extract() int {
 	return elem.nodeId
 }
 
+// Peek at the head of a queue, returning the nodeId without popping it
+func (q *pqueue) Peek() int {
+	if len(q.contents) == 0 {
+		panic("Queue is empty!")
+	}
+	return q.contents[0].nodeId
+}
+
 // Returns -1 if el1 < el2, 0 if el1 is not > or < than el2, 1 if el1 > el2
 func compareElems(el1, el2 pqueueElem) int {
 	tsCompare := el1.timestamp.Compare(el2.timestamp)

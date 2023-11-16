@@ -61,6 +61,7 @@ func TestOrchestratorNoError(t *testing.T) {
 	nodes[3] = nodetypes.NewNaiveNode(3, nodeLs, sm)
 
 	o := NewOrchestrator(nodes, sm)
+	o.Init()
 	err := o.NodeEnter(0); assertNoError(err, tLog)
 	err = o.NodeExit(0); assertNoError(err, tLog)
 	err = o.NodeEnter(1); assertNoError(err, tLog)
@@ -79,6 +80,7 @@ func TestOrchestratorSameNodeEnterTwice(t *testing.T) {
 	nodes[2] = nodetypes.NewNaiveNode(2, nodeLs, sm)
 	nodes[3] = nodetypes.NewNaiveNode(3, nodeLs, sm)
 	o := NewOrchestrator(nodes, sm)
+	o.Init()
 	err := o.NodeEnter(1); assertNoError(err, tLog)
 	err = o.NodeEnter(1); assertError(err, tLog)
 }
@@ -95,6 +97,7 @@ func TestOrchestratorTwoNodesEnterCS(t *testing.T) {
 	nodes[2] = nodetypes.NewNaiveNode(2, nodeLs, sm)
 	nodes[3] = nodetypes.NewNaiveNode(3, nodeLs, sm)
 	o := NewOrchestrator(nodes, sm)
+	o.Init()
 	err := o.NodeEnter(1); assertNoError(err, tLog)
 }
 
@@ -110,6 +113,7 @@ func TestOrchestratorRandomNodeExit(t *testing.T) {
 	nodes[2] = nodetypes.NewNaiveNode(2, nodeLs, sm)
 	nodes[3] = nodetypes.NewNaiveNode(3, nodeLs, sm)
 	o := NewOrchestrator(nodes, sm)
+	o.Init()
 	err := o.NodeExit(2); assertError(err, tLog)
 }
 
@@ -125,6 +129,7 @@ func TestOrchestratorNodeEnterAnotherExit(t *testing.T) {
 	nodes[2] = nodetypes.NewNaiveNode(2, nodeLs, sm)
 	nodes[3] = nodetypes.NewNaiveNode(3, nodeLs, sm)
 	o := NewOrchestrator(nodes, sm)
+	o.Init()
 	err := o.NodeEnter(1); assertNoError(err, tLog)
 	err = o.NodeExit(2); assertError(err, tLog)
 }

@@ -12,6 +12,7 @@ type smData struct {
 }
 
 type Node interface {
+	Init()
 	AcquireLock()
 	ReleaseLock()
 }
