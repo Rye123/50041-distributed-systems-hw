@@ -1,11 +1,13 @@
 # HW2
 
-We follow the following scenario: We have a **shared** memory space in the form of a struct `nodetypes.SharedMemory`.
+We follow the following scenario: We have a **shared** memory space in the form of a struct `nodetypes.SharedMemory`, which can be modified by an interface `Node`.
 - This struct provides the functions `EnterCS` and `ExitCS`, which modify the shared memory space.
-- A simple implementation can be seen in `nodetypes.NaiveNode`, which simply acquires and releases the lock ignoring everyone else.
+- The methods provided `panic()` when a node enters the "critical section" while a previous node has yet to call `ExitCS()`.
+- This forces the implementer of `Node` to provide their own mutual exclusion algorithms, allowing us a common interface to test implementations of Lamport's Shared Priority Queue, Ricart and Agrawala's Optimisation, and the Voting Protocol.
+- A simple implementation can be seen in `nodetypes.NaiveNode`, which simply acquires and releases the lock ignoring everyone else. This would breach the safety condition, resulting in a `panic()`.
 
 The `Orchestrator` allows us a convenient interface to simulate various test cases. By using it along with the `testing` package, we can create a readable and non-verbose series of tests.
-- An example is in `Orchestrator_test.go`, which tests the orchestrator using the above naive implementation.
+- An example is in `Orchestrator_test.go`, which tests the orchestrator using the above naive implementation and ensures that it successfully detects the resulting breach of the safety condition.
 
 ## Implementation Notes
 ### Lamport's Shared Priority Queue
