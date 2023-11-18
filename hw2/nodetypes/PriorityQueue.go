@@ -6,21 +6,20 @@
 
 package nodetypes
 
-import (
-	"1005129_RYAN_TOH/hw2/clock"
-)
+import "sync"
 
 type pqueueElem struct {
 	nodeId int
-	timestamp clock.ClockVal
+	timestamp ClockVal
 }
 
 type pqueue struct {
 	contents []pqueueElem
+	accessLock *sync.Mutex
 }
 
 func newPQueue() *pqueue {
-	return &pqueue{make([]pqueueElem, 0)}
+	return &pqueue{make([]pqueueElem, 0), &sync.Mutex{}}
 }
 
 func (q *pqueue) Length() int {
@@ -28,7 +27,8 @@ func (q *pqueue) Length() int {
 }
 
 // Inserts a new element into the queue
-func (q *pqueue) Insert(nodeId int, timestamp clock.ClockVal) {
+func (q *pqueue) Insert(nodeId int, timestamp ClockVal) {
+	q.accessLock.Lock(); defer q.accessLock.Unlock()
 	newElem := pqueueElem{nodeId, timestamp}
 	for i, elem := range q.contents {
 		// Iterate until we reach the first element where newElem is < elem
@@ -46,6 +46,7 @@ func (q *pqueue) Insert(nodeId int, timestamp clock.ClockVal) {
 
 // Pops the head of the queue, returning the nodeId
 func (q *pqueue) Extract() int {
+	q.accessLock.Lock(); defer q.accessLock.Unlock()
 	if len(q.contents) == 0 {
 		panic("Queue is empty!")
 	}
@@ -68,9 +69,10 @@ func (q *pqueue) Peek() int {
 
 // Returns -1 if el1 < el2, 0 if el1 is not > or < than el2, 1 if el1 > el2
 func compareElems(el1, el2 pqueueElem) int {
-	tsCompare := el1.timestamp.Compare(el2.timestamp)
-	if tsCompare != 0 {
-		return tsCompare
+	if el1.timestamp < el2.timestamp {
+		return -1
+	} else if el1.timestamp > el2.timestamp {
+		return 1
 	}
 
 	// Otherwise, fall back to machine ID -- lower ID should have a lower "timestamp"

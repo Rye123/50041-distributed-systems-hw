@@ -23,9 +23,32 @@ func NewOrchestrator(nodes map[int](nodetypes.Node), sm *nodetypes.SharedMemory)
 
 func (o *Orchestrator) Init() (err error) {
 	for _, n := range o.nodes {
-		n.Init()
+		err = n.Init()
+		if err != nil {
+			return err
+		}
 	}
 	return nil
+}
+
+func (o *Orchestrator) Shutdown() (err error) {
+	log.Printf("Orchestrator: Shutdown")
+	errCount := 0
+	for _, n := range o.nodes {
+		shutdownErr := n.Shutdown()
+		if err != nil {
+			errCount++
+			err = shutdownErr
+		}
+	}
+	if err != nil {
+		return errors.New(fmt.Sprintf("Encountered %d errors. One such error: %v", errCount, err))
+	}
+	return nil
+}
+
+func (o *Orchestrator) NodeShutdown(nodeId int) (err error) {
+	return o.nodes[nodeId].Shutdown()
 }
 
 func (o *Orchestrator) NodeEnter(nodeId int) (err error) {

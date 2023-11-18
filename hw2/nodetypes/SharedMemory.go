@@ -1,20 +1,28 @@
 package nodetypes
 
 import (
-	"1005129_RYAN_TOH/hw2/clock"
 	"fmt"
 )
+
+type ClockVal int
+func MaxClockVal(c1, c2 ClockVal) ClockVal {
+	if c1 > c2 {
+		return c1
+	}
+	return c2
+}
 
 // Record of who obtained the lock at what timestamp
 type smData struct {
 	lockHolder int
-	timestamp clock.ClockVal
+	timestamp ClockVal
 }
 
 type Node interface {
-	Init()
+	Init() error
 	AcquireLock()
 	ReleaseLock()
+	Shutdown() error
 }
 
 type SharedMemory struct {
@@ -29,7 +37,7 @@ func NewSharedMemory() *SharedMemory {
 func (sm *SharedMemory) DumpHistory() string {
 	ret := "["
 	for _, smDat := range sm.history {
-		ret += fmt.Sprintf("N%d: %v, ", smDat.lockHolder, smDat.timestamp)
+		ret += fmt.Sprintf("N%d: %d, ", smDat.lockHolder, smDat.timestamp)
 	}
 
 	ret = ret[:len(ret)-2] + "]"
@@ -38,7 +46,7 @@ func (sm *SharedMemory) DumpHistory() string {
 }
 
 // Enter the critical section.
-func (sm *SharedMemory) EnterCS(nodeId int, timestamp clock.ClockVal) {
+func (sm *SharedMemory) EnterCS(nodeId int, timestamp ClockVal) {
 	if sm.currentHolderId == nodeId {
 		panic(fmt.Sprintf("Node %d tried to start CS again", nodeId))
 	}

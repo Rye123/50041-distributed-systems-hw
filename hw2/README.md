@@ -6,3 +6,6 @@ We follow the following scenario: We have a **shared** memory space in the form 
 
 The `Orchestrator` allows us a convenient interface to simulate various test cases. By using it along with the `testing` package, we can create a readable and non-verbose series of tests.
 - An example is in `Orchestrator_test.go`, which tests the orchestrator using the above naive implementation.
+
+## Testing
+Our main test involves simultaneously creating 100 nodes. Then, we initialise 100 goroutines for each node to sequentially enter and exit the critical section.

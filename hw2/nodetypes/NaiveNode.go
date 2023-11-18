@@ -1,29 +1,25 @@
 package nodetypes
 
-import (
-	"1005129_RYAN_TOH/hw2/clock"
-)
-
 type NaiveNode struct {
 	nodeId int
-	clock clock.ClockVal
+	clock ClockVal
 	smPtr *SharedMemory
 }
 
-func NewNaiveNode(nodeId int, nodeIds []int, sm *SharedMemory) *NaiveNode {
-	return &NaiveNode{nodeId, clock.NewClockVal(nodeIds), sm}
+func NewNaiveNode(nodeId int, nodeLs []int, sm *SharedMemory) *NaiveNode {
+	return &NaiveNode{nodeId, ClockVal(0), sm}
 }
 
-func (n *NaiveNode) Init() {
-	
-}
+func (n *NaiveNode) Init() (err error) { return nil }
+
+func (n *NaiveNode) Shutdown() (err error) { return nil }
 
 func (n *NaiveNode) AcquireLock() {
-	n.clock = n.clock.Increment(n.nodeId, 1)
-	n.smPtr.EnterCS(n.nodeId, n.clock.Clone())
+	n.clock++
+	n.smPtr.EnterCS(n.nodeId, n.clock)
 }
 
 func (n *NaiveNode) ReleaseLock() {
-	n.clock = n.clock.Increment(n.nodeId, 1)
+	n.clock++
 	n.smPtr.ExitCS(n.nodeId)
 }

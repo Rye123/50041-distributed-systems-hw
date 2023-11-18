@@ -21,17 +21,20 @@ func main() {
 	nodes[0] = nodetypes.NewLamportNode(0, endpoints, sm)
 	nodes[1] = nodetypes.NewLamportNode(1, endpoints, sm)
 	nodes[2] = nodetypes.NewLamportNode(2, endpoints, sm)
-
-	for _, n := range nodes {
-		n.Init()
-	}
 	
 	o := NewOrchestrator(nodes, sm)
-	err := o.NodeEnter(0); if (err != nil) { fmt.Printf("Error: %v\n", err) }
-	err = o.NodeExit(0); if (err != nil) { fmt.Printf("Error: %v\n", err) }
-	err = o.NodeEnter(1); if (err != nil) { fmt.Printf("Error: %v\n", err) }
-	err = o.NodeExit(1); if (err != nil) { fmt.Printf("Error: %v\n", err) }
-	err = o.NodeEnter(2); if (err != nil) { fmt.Printf("Error: %v\n", err) }
-	err = o.NodeEnter(1); if (err != nil) { fmt.Printf("Error: %v\n", err) }
-	err = o.NodeExit(2); if (err != nil) { fmt.Printf("Error: %v\n", err) }
+	o.Init()
+	defer o.Shutdown()
+
+	go func() {
+		err := o.NodeEnter(0); if (err != nil) {fmt.Printf("Err: %v\n", err)}
+		err = o.NodeExit(0); if err != nil {fmt.Printf("Err: %v\n", err)}
+	}()
+
+	go func() {
+		err := o.NodeEnter(1); if (err != nil) {fmt.Printf("Err: %v\n", err)}
+		err = o.NodeExit(1); if err != nil {fmt.Printf("Err: %v\n", err)}
+	}()
+
+	fmt.Scanf("%d")
 }
