@@ -12,26 +12,12 @@ import (
    This struct provides the functions EnterCS and ExitCS, and panics the moment multiple nodes are IN the section -- the responsibility of restricting entry is on the implementation of the nodes that call EnterCS and ExitCS.
 */
 
-func NewOrchestratorWithNRicartNodes(nodeCount int, sm *nodetypes.SharedMemory) *Orchestrator {
-	nodes := make(map[int](nodetypes.Node))
-	nodeIds := make([]int, 0)
-	endpoints := make([]nodetypes.RicartNodeEndpoint, 0)
-	for nodeId := 0; nodeId < nodeCount; nodeId++ {
-		nodeIds = append(nodeIds, nodeId)
-		endpoints = append(endpoints, nodetypes.NewRicartNodeEndpoint(nodeId))
-	}
-	for _, nodeId := range(nodeIds) {
-		nodes[nodeId] = nodetypes.NewRicartNode(nodeId, endpoints, sm)
-	}
-
-	return NewOrchestrator(nodes, sm)
-}
-
 func TestStandardUsageRicart(t *testing.T) {
 	//tLog := useTempLog(t)
+	nodeCount := 100
 
 	sm := nodetypes.NewSharedMemory()
-	o := NewOrchestratorWithNRicartNodes(100, sm)
+	o := NewOrchestratorWithNRicartNodes(nodeCount, sm)
 	o.Init()
 	errChan := make(chan error)
 
@@ -44,7 +30,7 @@ func TestStandardUsageRicart(t *testing.T) {
 		}(nodeId)
 	}
 
-	routineCount := 100 * 2
+	routineCount := nodeCount * 2
 	curCount := 0
 	for err := range errChan {
 		curCount++

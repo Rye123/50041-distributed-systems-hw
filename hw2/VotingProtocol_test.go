@@ -12,21 +12,6 @@ import (
    This struct provides the functions EnterCS and ExitCS, and panics the moment multiple nodes are IN the section -- the responsibility of restricting entry is on the implementation of the nodes that call EnterCS and ExitCS.
 */
 
-func NewOrchestratorWithNVoterNodes(nodeCount int, sm *nodetypes.SharedMemory) *Orchestrator {
-	nodes := make(map[int](nodetypes.Node))
-	nodeIds := make([]int, 0)
-	endpoints := make([]nodetypes.VoterNodeEndpoint, 0)
-	for nodeId := 0; nodeId < nodeCount; nodeId++ {
-		nodeIds = append(nodeIds, nodeId)
-		endpoints = append(endpoints, nodetypes.NewVoterNodeEndpoint(nodeId))
-	}
-	for _, nodeId := range(nodeIds) {
-		nodes[nodeId] = nodetypes.NewVoterNode(nodeId, endpoints, sm)
-	}
-
-	return NewOrchestrator(nodes, sm)
-}
-
 func TestStandardUsageVoting(t *testing.T) {
 	//tLog := useTempLog(t)
 	nodeCount := 100
