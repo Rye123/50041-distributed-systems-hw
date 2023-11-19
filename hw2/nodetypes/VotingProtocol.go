@@ -39,7 +39,7 @@ type VoterNode struct {
 
 	// Variables to handle node's vote
 	voteBacklog *pqueueVP
-	voteRescinded bool     // True if this node has rescinded but is waiting for the vote
+	attemptingRescind bool     // True if this node has rescinded but is waiting for the vote
 	votedForReq VoterMsg // Request that we've voted for
 	voteMsgs chan VoterMsg // Channel of unhandled requests/releases (i.e. not in queue)
 }
@@ -153,8 +153,6 @@ func (n *VoterNode) voterHandleRequest(msg VoterMsg) {
 			// Prioritise lower node ID
 			rescind = true
 		}
-	} else {
-		rescind = false
 	}
 
 	if rescind {
@@ -162,11 +160,12 @@ func (n *VoterNode) voterHandleRequest(msg VoterMsg) {
 		n.voteBacklog.Insert(msg.nodeId, msg.electionId, msg.timestamp)
 
 		// Request for rescind
-		if !n.voteRescinded {
+		if !n.attemptingRescind {
+			// We only send the request to rescind if we haven't sent it before
 			laterReq := n.votedForReq
 			n.clock++; n.send(laterReq.electionId, laterReq.nodeId, VPRescind, n.clock)
 			log.Printf("[%d] - N%d: ATTEMPT RESCIND from N%d.", n.clock, n.nodeId, laterReq.nodeId)
-			n.voteRescinded = true
+			n.attemptingRescind = true
 		}
 	} else {
 		// Add to backlog
@@ -176,26 +175,33 @@ func (n *VoterNode) voterHandleRequest(msg VoterMsg) {
 
 // Handle an incoming release
 func (n *VoterNode) voterHandleRelease(msg VoterMsg) {
+	if msg.electionId != n.votedForReq.electionId {
+		panic(fmt.Sprintf("N%d: Received INVALID RELEASE from N%d: Expected ID: %v, received ID: %v", n.nodeId, msg.nodeId, n.votedForReq.electionId, msg.electionId))
+		
+	}
+
+	n.attemptingRescind = false
+	
 	if n.voteBacklog.Length() == 0 {
 		n.votedForReq = getEmptyVoterMsg()
+		log.Printf("[%d] - N%d: Received RELEASE from N%d. Current backlog: []", n.clock, n.nodeId, msg.nodeId)
 		return
 	}
 
-	if msg.electionId != n.votedForReq.electionId {
-		panic(fmt.Sprintf("N%d: Received INVALID RELEASE from N%d: Expected ID: %v, received ID: %v", n.nodeId, msg.nodeId, n.votedForReq.electionId, msg.electionId))
-	}
-
-	n.voteRescinded = false
-	
+	// Vote for next in queue
 	next := n.voteBacklog.ExtractElem()
 	n.votedForReq = VoterMsg{next.nodeId, next.electionId, next.timestamp, VPRequest}
 	n.clock++; n.send(next.electionId, next.nodeId, VPVote, n.clock)
+	
 	log.Printf("[%d] - N%d: Received RELEASE from N%d. VOTED for N%d. Current backlog: %v", n.clock, n.nodeId, msg.nodeId, next.nodeId, n.voteBacklog.contents)
 }
 
 func (n *VoterNode) handleVote(rcvd_msg VoterMsg) {
 	if !n.hasOngoingReq {
 		log.Printf("[%d] - N%d: Received late VOTE from N%d.", n.clock, n.nodeId, rcvd_msg.nodeId)
+		
+		// Return the late vote
+		n.clock++; n.send(rcvd_msg.electionId, rcvd_msg.nodeId, VPRelease, n.clock)
 		return
 	}
 
@@ -204,13 +210,15 @@ func (n *VoterNode) handleVote(rcvd_msg VoterMsg) {
 	if successfulVote {
 		log.Printf("[%d] - N%d: Received VOTE from N%d. Voters: %v", n.clock, n.nodeId, rcvd_msg.nodeId, n.ongoingReqSesh.GetVoters())
 	} else {
-		log.Printf("[%d] - N%d: Received late VOTE from N%d (Wrong election ID).", n.clock, n.nodeId, rcvd_msg.nodeId)
+		log.Printf("[%d] - N%d: Received late VOTE from N%d.", n.clock, n.nodeId, rcvd_msg.nodeId)
+		
+		// Return the late vote
+		n.clock++; n.send(rcvd_msg.electionId, rcvd_msg.nodeId, VPRelease, n.clock)
 	}
 }
 
 // Handle an incoming rescind
 func (n *VoterNode) handleRescind(rcvd_msg VoterMsg) {
-	// Release vote, then request for vote again
 	if !n.hasOngoingReq {
 		log.Printf("[%d] - N%d: Received late RESCIND from N%d.", n.clock, n.nodeId, rcvd_msg.nodeId)
 		return
@@ -364,10 +372,18 @@ func (s *voteSession) AddVote(electionId string, nodeId int) bool {
 	if electionId != s.electionId {
 		return false
 	}
-	
-	s.votes[nodeId]++
-	if s.votes[nodeId] > 1 {
-		panic(fmt.Sprintf("s.votes[%d] = %d", nodeId, s.votes[nodeId]))
+
+	if s.checkVotes() == s.majority { // we REJECT any further votes
+		// This prevents the case where this node receives a new vote while it is releasing the votes and forgets the received node.
+		return false
+	}
+
+	if s.votes[nodeId] == -1 { // RESCINDED
+		s.votes[nodeId] = 0
+	} else if s.votes[nodeId] == 0 { // NOT VOTED
+		s.votes[nodeId] = 1
+	} else {
+		panic(fmt.Sprintf("s.votes[%d] = %d", nodeId, s.votes[nodeId] + 1))
 	}
 
 	if s.checkVotes() == s.majority {
@@ -386,8 +402,14 @@ func (s *voteSession) RemoveVote(electionId string, nodeId int) bool {
 	if s.checkVotes() >= s.majority { // too late, prevent any further modification
 		return false
 	}
-	
-	s.votes[nodeId] = -1
+
+	if s.votes[nodeId] == -1 { // RESCINDED
+		panic(fmt.Sprintf("s.votes[%d] = %d", nodeId, s.votes[nodeId] - 1))
+	} else if s.votes[nodeId] == 0 { // NOT VOTED
+		s.votes[nodeId] = -1
+	} else {
+		s.votes[nodeId] = 0
+	}
 
 	return true
 }
