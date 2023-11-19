@@ -25,5 +25,14 @@ Again, I used the above implemented internal priority queue, and each node had a
 - Here, since an ONGOING request was also a PENDING request (using the terminology from above), we could reduce the tracking of this to a single mutex lock.
 - However, for modification of the response count, a mutex lock was still needed.
 
+### Voting Protocol
+The prior implementations heavily relied on the fact that "votes" (i.e. request acknowledgements) could not be rescinded. Hence, it was safe to handle each incoming message concurrently regardless of the message type, relying on mutex locks to ensure safety.
+
+In the Voting Protocol (with deadlock prevention), we needed to be able to rescind a vote, which meant that if the above implementation of concurrent message handling were to be naively used, there would be separate goroutines handling incoming requests and releases. This made it far more difficult as any mutex lock over the node's vote would need to be *shared* among goroutines, destroying the purpose of the mutex lock in the first place.
+
+Hence, I had a separate goroutine that handled requests and releases sequentially (with a channel). A modified version of the local priority queue was used to keep track of the requests that had yet to be voted for. 
+
+To account for late messages (e.g. late `VOTE`s and late `RESCIND`s), each 'election' (where a node requested to enter the CS) had a unique election ID.
+
 ## Testing
-	Our main test involves simultaneously creating 100 nodes. Then, we initialise 100 goroutines for each node to sequentially enter and exit the critical section.
+Our main test involves simultaneously creating 100 nodes. Then, we initialise 100 goroutines for each node to sequentially enter and exit the critical section.

@@ -57,9 +57,9 @@ func (o *Orchestrator) NodeEnter(nodeId int) (err error) {
 			err = errors.New(fmt.Sprintf("%v", r))
 		}
 	}()
-	log.Printf("N%d: Request to enter CS", nodeId)
+	//log.Printf("N%d: Request to enter CS", nodeId)
 	o.nodes[nodeId].AcquireLock()
-	log.Printf("N%d: Entered CS", nodeId)
+	//log.Printf("N%d: Entered CS", nodeId)
 	return nil
 }
 
@@ -69,7 +69,7 @@ func (o *Orchestrator) NodeExit(nodeId int) (err error) {
 			err = errors.New(fmt.Sprintf("%v", r))
 		}
 	}()
-	log.Printf("N%d: Exit CS", nodeId)
+	//log.Printf("N%d: Exit CS", nodeId)
 	o.nodes[nodeId].ReleaseLock()
 	return nil
 }

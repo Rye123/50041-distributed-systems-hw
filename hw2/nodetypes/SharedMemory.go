@@ -4,27 +4,13 @@ import (
 	"fmt"
 )
 
-type ClockVal int
-func MaxClockVal(c1, c2 ClockVal) ClockVal {
-	if c1 > c2 {
-		return c1
-	}
-	return c2
-}
-
 // Record of who obtained the lock at what timestamp
 type smData struct {
 	lockHolder int
 	timestamp ClockVal
 }
 
-type Node interface {
-	Init() error
-	AcquireLock()
-	ReleaseLock()
-	Shutdown() error
-}
-
+// SharedMemory struct that has no innate protection over concurrent usage.
 type SharedMemory struct {
 	history []smData
 	currentHolderId int // current holder, default is -1. this is the shared memory that is being modified and checked

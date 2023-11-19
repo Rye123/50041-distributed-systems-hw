@@ -1,5 +1,6 @@
 /**
   A priority queue that uses vector clocks and nodeIds for sorting.
+  - This is specific for the Voting Protocol, since we need to store the election ID too.
 
   The element with the LOWEST timestamp will be prioritised.
 */
@@ -8,31 +9,32 @@ package nodetypes
 
 import "sync"
 
-type pqueueElem struct {
+type pqueueVPElem struct {
 	nodeId int
+	electionId string
 	timestamp ClockVal
 }
 
-type pqueue struct {
-	contents []pqueueElem
+type pqueueVP struct {
+	contents []pqueueVPElem
 	accessLock *sync.Mutex
 }
 
-func newPQueue() *pqueue {
-	return &pqueue{make([]pqueueElem, 0), &sync.Mutex{}}
+func newPQueueVP() *pqueueVP {
+	return &pqueueVP{make([]pqueueVPElem, 0), &sync.Mutex{}}
 }
 
-func (q *pqueue) Length() int {
+func (q *pqueueVP) Length() int {
 	return len(q.contents)
 }
 
 // Inserts a new element into the queue
-func (q *pqueue) Insert(nodeId int, timestamp ClockVal) {
+func (q *pqueueVP) Insert(nodeId int, electionId string, timestamp ClockVal) {
 	q.accessLock.Lock(); defer q.accessLock.Unlock()
-	newElem := pqueueElem{nodeId, timestamp}
+	newElem := pqueueVPElem{nodeId, electionId, timestamp}
 	for i, elem := range q.contents {
 		// Iterate until we reach the first element where newElem is < elem
-		cmp := compareElems(newElem, elem)
+		cmp := compareElemsVP(newElem, elem)
 		if cmp == -1 {
 			q.contents = append(q.contents[:i+1], q.contents[i:]...)
 			q.contents[i] = newElem
@@ -45,28 +47,28 @@ func (q *pqueue) Insert(nodeId int, timestamp ClockVal) {
 }
 
 // Pops the head of the queue, returning the nodeId
-func (q *pqueue) Extract() int {
+func (q *pqueueVP) Extract() int {
 	q.accessLock.Lock(); defer q.accessLock.Unlock()
 	if len(q.contents) == 0 {
 		panic("Queue is empty!")
 	}
 	elem := q.contents[0]
 	if len(q.contents) == 1 {
-		q.contents = make([]pqueueElem, 0)
+		q.contents = make([]pqueueVPElem, 0)
 	} else {
 		q.contents = q.contents[1:]
 	}
 	return elem.nodeId
 }
 
-func (q *pqueue) ExtractElem() pqueueElem {
+func (q *pqueueVP) ExtractElem() pqueueVPElem {
 	q.accessLock.Lock(); defer q.accessLock.Unlock()
 	if len(q.contents) == 0 {
 		panic("Queue is empty!")
 	}
 	elem := q.contents[0]
 	if len(q.contents) == 1 {
-		q.contents = make([]pqueueElem, 0)
+		q.contents = make([]pqueueVPElem, 0)
 	} else {
 		q.contents = q.contents[1:]
 	}
@@ -74,7 +76,7 @@ func (q *pqueue) ExtractElem() pqueueElem {
 }
 
 // Peek at the head of a queue, returning the nodeId without popping it
-func (q *pqueue) Peek() int {
+func (q *pqueueVP) Peek() int {
 	if len(q.contents) == 0 {
 		panic("Queue is empty!")
 	}
@@ -82,7 +84,7 @@ func (q *pqueue) Peek() int {
 }
 
 // Returns -1 if el1 < el2, 0 if el1 is not > or < than el2, 1 if el1 > el2
-func compareElems(el1, el2 pqueueElem) int {
+func compareElemsVP(el1, el2 pqueueVPElem) int {
 	if el1.timestamp < el2.timestamp {
 		return -1
 	} else if el1.timestamp > el2.timestamp {
