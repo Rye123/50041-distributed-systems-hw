@@ -193,7 +193,7 @@ func (n *VoterNode) voterHandleRelease(msg VoterMsg) {
 	n.votedForReq = VoterMsg{next.nodeId, next.electionId, next.timestamp, VPRequest}
 	n.clock++; n.send(next.electionId, next.nodeId, VPVote, n.clock)
 	
-	log.Printf("[%d] - N%d: Received RELEASE from N%d. VOTED for N%d. Current backlog: %v", n.clock, n.nodeId, msg.nodeId, next.nodeId, n.voteBacklog.contents)
+	log.Printf("[%d] - N%d: Received RELEASE from N%d. VOTED for N%d.", n.clock, n.nodeId, msg.nodeId, next.nodeId)
 }
 
 func (n *VoterNode) handleVote(rcvd_msg VoterMsg) {

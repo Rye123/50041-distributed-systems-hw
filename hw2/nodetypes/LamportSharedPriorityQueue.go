@@ -27,13 +27,14 @@ type LamportNodeEndpoint struct {
 func NewLamportNodeEndpoint(nodeId int) LamportNodeEndpoint {
 	return LamportNodeEndpoint{
 		nodeId,
-		make(chan LSPQMsg),
+		make(chan LSPQMsg, 10000),
 	}
 }
 
 type LamportNode struct {
 	nodeId int
 	clock ClockVal
+	clockLock *sync.Mutex
 	smPtr *SharedMemory
 	queue *pqueue
 	endpoint LamportNodeEndpoint
@@ -43,7 +44,6 @@ type LamportNode struct {
 	req_ack_count int // Reset to 0 when a new request starts
 	lastReqTimestamp ClockVal
 	ongoingReq *sync.Mutex // Locked while the request is ONGOING, i.e. not complete
-	hasOngoingReq bool
 	pendingReq *sync.Mutex // Locked while the request is PENDING, i.e. not fully responded to
 	exit chan bool
 	exited bool
@@ -66,10 +66,10 @@ func NewLamportNode(nodeId int, endpoints []LamportNodeEndpoint, sm *SharedMemor
 		endpointMap[endpoint.nodeId] = endpoint
 	}
 	return &LamportNode{
-		nodeId, ClockVal(0), sm, newPQueue(),
+		nodeId, ClockVal(0), &sync.Mutex{}, sm, newPQueue(),
 		myEndpoint, endpointMap, len(endpoints),
 		&sync.Mutex{}, 0, ClockVal(0),
-		&sync.Mutex{}, false, &sync.Mutex{},
+		&sync.Mutex{}, &sync.Mutex{},
 		make(chan bool), false}
 }
 
@@ -101,21 +101,6 @@ func (n *LamportNode) send(dstId int, action LSPQMsgAction, timestamp ClockVal) 
 		panic(fmt.Sprintf("N%d: Unknown endpoint with ID %d.", n.nodeId, dstId))
 	}
 	n.allEndpoints[dstId].recvChan <- msg
-
-	// Log
-	// msgType := ""
-	// switch action {
-	// case LSPQRequest:
-	// 	msgType = "REQUEST"
-	// case LSPQRelease:
-	// 	msgType = "RELEASE"
-	// case LSPQReqAck:
-	// 	msgType = "REQ_ACK"
-	// default:
-	// 	panic(fmt.Sprintf("N%d: Unknown message type %d", n.nodeId, action))
-		
-	// }
-	// log.Printf("N%d -> N%d: Sent %v (Timestamp: %v)", n.nodeId, dstId, msgType, timestamp)
 }
 
 func (n *LamportNode) handleMsg() {
@@ -126,30 +111,18 @@ func (n *LamportNode) handleMsg() {
 				panic(fmt.Sprintf("N%d: My channel was closed!", n.nodeId))
 			}
 			// Update local clock to be elementwise max + 1
+			n.clockLock.Lock()
 			n.clock = MaxClockVal(n.clock, rcvd_msg.timestamp) + 1
-
-			// Log
-			// msgType := ""
-			// switch rcvd_msg.action {
-			// case 0:
-			// 	msgType = "REQUEST"
-			// case 1:
-			// 	msgType = "RELEASE"
-			// case 2:
-			// 	msgType = "REQ_ACK"
-			// default:
-			// 	panic(fmt.Sprintf("N%d: Unknown message type %d", n.nodeId, rcvd_msg.action))
-			// }
-			// log.Printf("N%d [%d]: Received %v from N%d.", n.nodeId, n.clock, msgType, rcvd_msg.nodeId)
+			n.clockLock.Unlock()
 			
 			// We want to throw these messages to separate goroutines ASAP so we don't block the next send if any
 			// WARNING: This would cause race conditions if the variables being modified don't have locks.
 			switch rcvd_msg.action {
-			case LSPQRequest: // REQUEST
+			case 0: // REQUEST
 				go n.handleRequest(rcvd_msg)
-			case LSPQRelease: // RELEASE
+			case 1: // RELEASE
 				go n.handleRelease(rcvd_msg)
-			case LSPQReqAck: // REQ_ACK
+			case 2: // REQ_ACK
 				go n.handleReqAck(rcvd_msg)
 			}
 		case <-n.exit:
@@ -163,19 +136,19 @@ func (n *LamportNode) handleRequest(rcvd_msg LSPQMsg) {
 	n.queue.Insert(rcvd_msg.nodeId, rcvd_msg.timestamp)
 
 	// Respond if we have no EARLIER outstanding requests
-	// 1. Check for ongoing requests
-	if !n.hasOngoingReq {
-		// we HAVE an ongoing request
+	// 1. Check for ongoing requests by obtaining the lock.
+	if !n.ongoingReq.TryLock() {
+		// Didn't get the lock -- we HAVE an ongoing request
 		if n.lastReqTimestamp > rcvd_msg.timestamp {
 			// OUR request is LATER, ACK the req and return
-			n.clock++
+			n.clockLock.Lock(); n.clock++; n.clockLock.Unlock()
 			n.send(rcvd_msg.nodeId, LSPQReqAck, n.clock)
 			return
 		} else if n.lastReqTimestamp == rcvd_msg.timestamp {
 			// Requests are CONCURRENT
 			// Break tie with nodeId, LOWER ID is prioritised
 			if n.nodeId > rcvd_msg.nodeId {
-				n.clock++
+				n.clockLock.Lock(); n.clock++; n.clockLock.Unlock()
 				n.send(rcvd_msg.nodeId, LSPQReqAck, n.clock)
 				return
 			}
@@ -184,14 +157,15 @@ func (n *LamportNode) handleRequest(rcvd_msg LSPQMsg) {
 		// Our request is EARLIER. Block until it is no longer PENDING.
 		n.pendingReq.Lock()
 		// Respond with REQ_ACK AFTER it's no longer PENDING
-		n.clock++
+		n.clockLock.Lock(); n.clock++; n.clockLock.Unlock()
 		n.send(rcvd_msg.nodeId, LSPQReqAck, n.clock)
 		n.pendingReq.Unlock()
 	} else {
 		// We DON'T have an ongoing request at all
 		// Respond with REQ_ACK
-		n.clock++
+		n.clockLock.Lock(); n.clock++; n.clockLock.Unlock()
 		n.send(rcvd_msg.nodeId, LSPQReqAck, n.clock)
+		n.ongoingReq.Unlock()
 	}
 }
 
@@ -202,8 +176,9 @@ func (n *LamportNode) handleRelease(rcvd_msg LSPQMsg) {
 
 func (n *LamportNode) handleReqAck(rcvd_msg LSPQMsg) {
 	// Only handle REQ_ACK if we have an ongoing request
-	if !n.hasOngoingReq {
+	if n.ongoingReq.TryLock() {
 		log.Printf("N%d: Received late REQ_ACK from %d", n.nodeId, rcvd_msg.nodeId)
+		n.ongoingReq.Unlock()
 		return
 	}
 
@@ -234,11 +209,10 @@ func (n *LamportNode) broadcast(action LSPQMsgAction, timestamp ClockVal) {
 func (n *LamportNode) AcquireLock() {
 	// Block until we can obtain an ongoing request lock.
 	n.ongoingReq.Lock()
-	n.hasOngoingReq = true
 	//log.Printf("N%d: %d: Proceeding with request.", n.nodeId, n.clock)
 	
 	// Make a request with timestamp, and add req to queue
-	n.clock++
+	n.clockLock.Lock(); n.clock++; n.clockLock.Unlock()
 	req_timestamp := n.clock
 	n.lastReqTimestamp = req_timestamp
 	n.queue.Insert(n.nodeId, req_timestamp)
@@ -269,7 +243,6 @@ func (n *LamportNode) AcquireLock() {
 
 	// Request is completed
 	n.ongoingReq.Unlock()
-	n.hasOngoingReq = false
 }
 
 func (n *LamportNode) ReleaseLock() {
@@ -281,6 +254,6 @@ func (n *LamportNode) ReleaseLock() {
 
 	// Broadcast request with timestamp: RELEASE
 	log.Printf("N%d: %d: Exiting CS. Lock Released. Queue: %v", n.nodeId, n.clock, n.queue.contents)
-	n.clock++
+	n.clockLock.Lock(); n.clock++; n.clockLock.Unlock()
 	n.broadcast(LSPQRelease, n.clock)
 }

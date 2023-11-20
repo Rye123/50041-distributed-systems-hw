@@ -33,6 +33,7 @@ func NewRicartNodeEndpoint(nodeId int) RicartNodeEndpoint {
 type RicartNode struct {
 	nodeId int
 	clock ClockVal
+	clockLock *sync.Mutex
 	smPtr *SharedMemory
 	queue *pqueue
 	endpoint RicartNodeEndpoint
@@ -64,7 +65,7 @@ func NewRicartNode(nodeId int, endpoints []RicartNodeEndpoint, sm *SharedMemory)
 		endpointMap[endpoint.nodeId] = endpoint
 	}
 	return &RicartNode{
-		nodeId, ClockVal(0), sm, newPQueue(),
+		nodeId, ClockVal(0), &sync.Mutex{}, sm, newPQueue(),
 		myEndpoint, endpointMap, len(endpoints),
 		&sync.Mutex{}, 0, ClockVal(0),
 		&sync.Mutex{}, false,
@@ -99,21 +100,6 @@ func (n *RicartNode) send(dstId int, action RSPQMsgAction, timestamp ClockVal) {
 		panic(fmt.Sprintf("N%d: Unknown endpoint with ID %d.", n.nodeId, dstId))
 	}
 	n.allEndpoints[dstId].recvChan <- msg
-
-	// Log
-	// msgType := ""
-	// switch action {
-	// case RSPQRequest:
-	// 	msgType = "REQUEST"
-	// case RSPQRelease:
-	// 	msgType = "RELEASE"
-	// case RSPQReqAck:
-	// 	msgType = "REQ_ACK"
-	// default:
-	// 	panic(fmt.Sprintf("N%d: Unknown message type %d", n.nodeId, action))
-		
-	// }
-	// log.Printf("N%d -> N%d: Sent %v (Timestamp: %v)", n.nodeId, dstId, msgType, timestamp)
 }
 
 func (n *RicartNode) handleMsg() {
@@ -124,9 +110,10 @@ func (n *RicartNode) handleMsg() {
 				panic(fmt.Sprintf("N%d: My channel was closed!", n.nodeId))
 			}
 			// Update local clock to be elementwise max + 1
+			n.clockLock.Lock();
 			n.clock = MaxClockVal(n.clock, rcvd_msg.timestamp) + 1
+			n.clockLock.Unlock()
 			
-			// We want to throw these messages to separate goroutines ASAP so we don't block the next send if any
 			// WARNING: This would cause race conditions if the variables being modified don't have locks.
 			switch rcvd_msg.action {
 			case RSPQRequest: // REQUEST
@@ -143,7 +130,7 @@ func (n *RicartNode) handleMsg() {
 func (n *RicartNode) handleRequest(rcvd_msg RSPQMsg) {
 	if !n.hasOngoingReq {
 		// No ongoing requests, just ack
-		n.clock++
+		n.clockLock.Lock(); n.clock++; n.clockLock.Unlock()
 		n.send(rcvd_msg.nodeId, RSPQReqAck, n.clock)
 		//log.Printf("N%d: Sent REQ_ACK to N%d, Queue: %v.", n.nodeId, rcvd_msg.nodeId, n.queue.contents)
 		return
@@ -164,7 +151,7 @@ func (n *RicartNode) handleRequest(rcvd_msg RSPQMsg) {
 	}
 
 	// Otherwise, we acknowledge their request
-	n.clock++
+	n.clockLock.Lock(); n.clock++; n.clockLock.Unlock()
 	n.send(rcvd_msg.nodeId, RSPQReqAck, n.clock)
 	//log.Printf("N%d: Sent REQ_ACK to N%d, Queue: %v.", n.nodeId, rcvd_msg.nodeId, n.queue.contents)
 }
@@ -198,7 +185,7 @@ func (n *RicartNode) AcquireLock() {
 	//log.Printf("N%d: %d: Proceeding with request.", n.nodeId, n.clock)
 	
 	// Make a request with timestamp, and add req to queue
-	n.clock++
+	n.clockLock.Lock(); n.clock++; n.clockLock.Unlock()
 	req_timestamp := n.clock
 	n.lastReqTimestamp = req_timestamp
 	n.queue.Insert(n.nodeId, req_timestamp)
@@ -240,7 +227,7 @@ func (n *RicartNode) ReleaseLock() {
 	// Now, we can respond to all requests
 	for n.queue.Length() > 0 {
 		tgtId := n.queue.Extract()
-		n.clock++
+		n.clockLock.Lock(); n.clock++; n.clockLock.Unlock()
 		resp_timestamp := n.clock
 		n.send(tgtId, RSPQReqAck, resp_timestamp)
 	}

@@ -22,6 +22,7 @@ func NewOrchestrator(nodes map[int](nodetypes.Node), sm *nodetypes.SharedMemory)
 }
 
 func (o *Orchestrator) Init() (err error) {
+	log.Printf("Orchestrator: Initialised")
 	for _, n := range o.nodes {
 		err = n.Init()
 		if err != nil {

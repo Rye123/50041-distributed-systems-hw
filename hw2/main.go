@@ -2,97 +2,151 @@ package main
 
 import (
 	"1005129_RYAN_TOH/hw2/nodetypes"
+	"errors"
 	"fmt"
-	"time"
 	"log"
 	"strings"
-	"errors"
+	"time"
 )
 
-
-func ComputeNodeEntryTime(n nodetypes.Node, CSDelay time.Duration) time.Duration {
-	start := time.Now()
-	n.AcquireLock()
-	time.Sleep(CSDelay)
-	n.ReleaseLock()
-	return time.Since(start)
+type sysTimingRecord struct {
+	nodesEnteringCS int
+	timing time.Duration
+	err error
 }
 
 func main() {
-	nodeCount := 100
+	nodeCount := 10
+	csDelay := 100 * time.Millisecond
 	useLogBuf() // Disable logging
 
 	// Lamport's Shared Priority Queue
 	fmt.Printf("\n---LAMPORT'S SHARED PRIORITY QUEUE---\n")
-	sm := nodetypes.NewSharedMemory()
-	o := NewOrchestratorWithNLamportNodes(nodeCount, sm)
-	sysTiming, nodeTiming, err := TimeSystem(o, 100 * time.Millisecond)
-	if err != nil {
-		fmt.Printf("Lamport's Shared Priority Queue:\n\tSystem Time: %v\n\tError:%v\n", sysTiming, err)
-	} else {
-		fmt.Printf("Lamport's Shared Priority Queue:\n\tSystem Time: %v\n\tNode Times: %v\n", sysTiming, nodeTiming)
+	fmt.Printf("Progress: ")
+	sysTimes := make(map[int]time.Duration)
+	sysTimesChan := make(chan sysTimingRecord, nodeCount + 10)
+	//// Initialise goroutines
+	for i := 1; i <= nodeCount; i++ {
+		i := i
+		sm := nodetypes.NewSharedMemory()
+		o := NewOrchestratorWithNLamportNodes(nodeCount, sm)
+		record := TimeSystem(o, csDelay, i)
+		if record.err != nil {
+			fmt.Printf("Error with %d nodes entering CS: %v\n", record.nodesEnteringCS, record.err)
+		}
+		fmt.Printf("|")
+		sysTimes[record.nodesEnteringCS] = record.timing
 	}
+	fmt.Println()
+	//// Provide output
+	fmt.Printf("NODES ENTERING | TIME TAKEN\n")
+	for i := 1; i <= nodeCount; i++ {
+		fmt.Printf("%14d | %s\n", i, sysTimes[i].Round(time.Millisecond).String())
+	}
+	close(sysTimesChan)
+	
 	
 	// Ricart and Agrawala
 	fmt.Printf("\n---RICART AND AGRAWALA'S OPTIMISATION---\n")
-	sm = nodetypes.NewSharedMemory()
-	o = NewOrchestratorWithNRicartNodes(nodeCount, sm)
-	sysTiming, nodeTiming, err = TimeSystem(o, 100 * time.Millisecond)
-	if err != nil {
-		fmt.Printf("Ricart and Agrawala's Optimisation:\n\tSystem Time: %v\n\tError:%v\n", sysTiming, err)
-	} else {
-		fmt.Printf("Ricart and Agrawala's Optimisation:\n\tSystem Time: %v\n\tNode Times: %v\n", sysTiming, nodeTiming)
+	fmt.Printf("Progress: ")
+	sysTimes = make(map[int]time.Duration)
+	sysTimesChan = make(chan sysTimingRecord, nodeCount + 10)
+	//// Initialise goroutines
+	for i := 1; i <= nodeCount; i++ {
+		i := i
+		sm := nodetypes.NewSharedMemory()
+		o := NewOrchestratorWithNRicartNodes(nodeCount, sm)
+		record := TimeSystem(o, csDelay, i)
+		if record.err != nil {
+			fmt.Printf("Error with %d nodes entering CS: %v\n", record.nodesEnteringCS, record.err)
+		}
+		fmt.Printf("|")
+		sysTimes[record.nodesEnteringCS] = record.timing
 	}
+	fmt.Println()
+	//// Provide output
+	fmt.Printf("NODES ENTERING | TIME TAKEN\n")
+	for i := 1; i <= nodeCount; i++ {
+		fmt.Printf("%14d | %s\n", i, sysTimes[i].Round(time.Millisecond).String())
+	}
+	close(sysTimesChan)
+	
 	
 	// Voting Protocol
 	fmt.Printf("\n---VOTING PROTOCOL---\n")
-	sm = nodetypes.NewSharedMemory()
-	o = NewOrchestratorWithNVoterNodes(nodeCount, sm)
-	sysTiming, nodeTiming, err = TimeSystem(o, 100 * time.Millisecond)
-	if err != nil {
-		fmt.Printf("Voting Protocol:\n\tSystem Time: %v\n\tError:%v\n", sysTiming, err)
-	} else {
-		fmt.Printf("Voting Protocol:\n\tSystem Time: %v\n\tNode Times: %v\n", sysTiming, nodeTiming)
+	fmt.Printf("Progress: ")
+	sysTimes = make(map[int]time.Duration)
+	sysTimesChan = make(chan sysTimingRecord, nodeCount + 10)
+	//// Initialise goroutines
+	for i := 1; i <= nodeCount; i++ {
+		i := i
+		sm := nodetypes.NewSharedMemory()
+		o := NewOrchestratorWithNVoterNodes(nodeCount, sm)
+		record := TimeSystem(o, csDelay, i)
+		if record.err != nil {
+			fmt.Printf("Error with %d nodes entering CS: %v\n", record.nodesEnteringCS, record.err)
+		}
+		fmt.Printf("|")
+		sysTimes[record.nodesEnteringCS] = record.timing
 	}
+	fmt.Println()
+	//// Provide output
+	fmt.Printf("NODES ENTERING | TIME TAKEN\n")
+	for i := 1; i <= nodeCount; i++ {
+		fmt.Printf("%14d | %s\n", i, sysTimes[i].Round(time.Millisecond).String())
+	}
+	close(sysTimesChan)
+	
 }
 
-// Returns:
-// - Time taken for the entire system to complete
-// - Time taken for each node to enter and then exit the CS
-func TimeSystem(o *Orchestrator, CSDelay time.Duration) (time.Duration, map[int]time.Duration, error) {
+// Returns time taken for the entire system, when `nodesToEnter` nodes enter the CS simultaneously.
+func TimeSystem(o *Orchestrator, CSDelay time.Duration, nodesToEnter int) sysTimingRecord {
+	errChan := make(chan error)
+	retErr := error(nil)
 	start := time.Now()
-	nodeTimings := make(map[int]time.Duration)
-	nodeRecordChan := make(chan nodeRecord)
 	o.Init()
 
-	for nodeId, node := range o.nodes {
-		nodeId := nodeId
-		go func(id int, n nodetypes.Node) {
-			nodeRecordChan <- nodeRecord{nodeId, ComputeNodeEntryTime(n, CSDelay)}
-		}(nodeId, node)
-	}
-
-	recordCount := 0
-	expectedRecords := len(o.nodes)
-	for record := range nodeRecordChan {
-		recordCount++
-		nodeTimings[record.nodeId] = record.timing
-		if recordCount == expectedRecords {
-			if err := o.Shutdown(); err != nil {
-				return time.Since(start), nil, err
-			}
-			return time.Since(start), nodeTimings, nil
+	// Make `nodesToEnter` nodes enter simultaneously
+	nodesEntered := 0
+	for nodeId := range o.nodes {
+		if nodesEntered == nodesToEnter {
+			break
 		}
+
+		id := nodeId
+		go func(id int) {
+			errChan <- o.NodeEnter(id)
+			time.Sleep(CSDelay)
+			errChan <- o.NodeExit(id)
+		}(id)
+		nodesEntered++
 	}
 
-	return time.Since(start), nil, errors.New("Unexpected error.")
-}
+	// Wait for all goroutines to complete
+	curCount := 0
+	for {
+		select {
+		case err := <-errChan:
+			curCount++
+			if err != nil {
+				retErr = err
+			}
 
-type nodeRecord struct {
-	nodeId int
-	timing time.Duration
-}
+			if curCount == nodesEntered * 2 {
+				if shutdownErr := o.Shutdown(); shutdownErr != nil {
+					retErr = err
+				}
+				return sysTimingRecord{nodesToEnter, time.Since(start), retErr}
+			} else if curCount > nodesEntered * 2 {
+				panic(fmt.Sprintf("Unexpected curCount %d at nodes %d", curCount, nodesToEnter))
+			}
+		case <-time.After(120 * time.Second):
+			return sysTimingRecord{nodesToEnter, time.Since(start), errors.New("Timeout after 120 seconds.")}
+		}
 
+		
+	}
+}
 
 func NewOrchestratorWithNLamportNodes(nodeCount int, sm *nodetypes.SharedMemory) *Orchestrator {
 	nodes := make(map[int](nodetypes.Node))

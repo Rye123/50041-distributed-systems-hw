@@ -1,3 +1,8 @@
+/**
+ORCHESTRATOR_TEST:
+  Validates that the Orchestrator works as expected, using NaiveNodes to test.
+*/
+
 package main
 
 import (

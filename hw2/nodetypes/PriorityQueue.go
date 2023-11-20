@@ -75,6 +75,7 @@ func (q *pqueue) ExtractElem() pqueueElem {
 
 // Peek at the head of a queue, returning the nodeId without popping it
 func (q *pqueue) Peek() int {
+	q.accessLock.Lock(); defer q.accessLock.Unlock()
 	if len(q.contents) == 0 {
 		panic("Queue is empty!")
 	}
