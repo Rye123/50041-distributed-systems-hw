@@ -17,7 +17,7 @@ The tester code for grading is in `DEMO_test.go`.
   - This can be changed with `DEMO_NODE_COUNT` and `DEMO_CS_DELAY` in `DEMO_test.go`.
 - Note that the output is in **physical clock order** based on the time `log.Printf` was called -- **this may not match the action order of events**. The true order is in logical clock order.
 
-### Lamport's Shared Priority Queue
+#### Lamport's Shared Priority Queue
 To run this, do:
 ```bash
 go test --run TestLamport_DEMO
@@ -56,7 +56,7 @@ To interpret the above output:
   - To interpret the queue: `[{node request_timestamp}]`
   - This queue will be ordered with the smallest timestamp. In the case of concurrent timestamps, the lower ID will have the 'smaller' timestamp.
 
-### Ricart and Agrawala's Optimisation
+#### Ricart and Agrawala's Optimisation
 To run this, do:
 ```bash
 go test --run TestRicart_DEMO
@@ -95,7 +95,7 @@ To interpret the above output:
   - To interpret the queue: `[{node request_timestamp}]`
   - This queue will be ordered with the smallest timestamp. In the case of concurrent timestamps, the lower ID will have the 'smaller' timestamp.
   
-### Voting Protocol
+#### Voting Protocol
 To run this, do:
 ```bash
 go test --run TestVoting_DEMO
@@ -135,6 +135,68 @@ Due to the difference in protocol there's far more messages in the output, hence
   2023/11/20 15:39:24 [97] - N4: Sent RELEASE to N5.
   2023/11/20 15:39:24 [97] - N4: Sent RELEASE to N0.
   ```
+
+
+### Printing the Table
+Running `main.go` prints the timing calculations.
+```bash
+go run .
+```
+- This calculates the time taken for x nodes to enter the CS, out of N nodes.
+- N is 10, and each node spends 100 milliseconds in the CS.
+
+```
+---LAMPORT'S SHARED PRIORITY QUEUE---
+Progress: ||||||||||
+NODES ENTERING | TIME TAKEN
+             1 | 146ms
+             2 | 218ms
+             3 | 333ms
+             4 | 428ms
+             5 | 573ms
+             6 | 696ms
+             7 | 778ms
+             8 | 920ms
+             9 | 1.017s
+            10 | 1.112s
+
+---RICART AND AGRAWALA'S OPTIMISATION---
+Progress: ||||||||||
+NODES ENTERING | TIME TAKEN
+             1 | 110ms
+             2 | 222ms
+             3 | 348ms
+             4 | 445ms
+             5 | 553ms
+             6 | 683ms
+             7 | 772ms
+             8 | 920ms
+             9 | 1.033s
+            10 | 1.205s
+
+---VOTING PROTOCOL---
+Progress: ||||||||||
+NODES ENTERING | TIME TAKEN
+             1 | 109ms
+             2 | 220ms
+             3 | 331ms
+             4 | 441ms
+             5 | 554ms
+             6 | 667ms
+             7 | 791ms
+             8 | 885ms
+             9 | 996ms
+            10 | 1.106s
+```
+
+We have the following table:
+
+
+| Nodes Entering                                      | 1   | 2   | 3   | 4   | 5   | 6   | 7   | 8   | 9    | 10   |
+| --------------------------------------------------- | --- | --- | --- | --- | --- | --- | --- | --- | ---- | ---- |
+| Lamport Shared Priority Queue: Time Taken (ms)      | 146 | 218 | 333 | 428 | 573 | 696 | 778 | 920 | 1017 | 1112 |
+| Ricart and Agrawala's Optimisation: Time Taken (ms) | 110 | 222 | 348 | 445 | 553 | 683 | 772 | 920 | 1033 | 1205 |
+| Voting Protocol: Time Taken (ms)                    | 109 | 220 | 331 | 441 | 554 | 667 | 791 | 885 | 996  | 1106 | 
 
 
 ### Testing (Development)
@@ -190,55 +252,7 @@ ok      1005129_RYAN_TOH/hw2    79.783s
 
 
 
-## Printing the Table
-Running `main.go` prints the timing calculations:
-```bash
-go run .
-```
 
-```
----LAMPORT'S SHARED PRIORITY QUEUE---
-Progress: ||||||||||
-NODES ENTERING | TIME TAKEN
-             1 | 140ms
-             2 | 234ms
-             3 | 347ms
-             4 | 445ms
-             5 | 539ms
-             6 | 667ms
-             7 | 820ms
-             8 | 884ms
-             9 | 1.014s
-            10 | 1.105s
-
----RICART AND AGRAWALA'S OPTIMISATION---
-Progress: ||||||||||
-NODES ENTERING | TIME TAKEN
-             1 | 111ms
-             2 | 222ms
-             3 | 316ms
-             4 | 458ms
-             5 | 554ms
-             6 | 664ms
-             7 | 789ms
-             8 | 899ms
-             9 | 1.011s
-            10 | 1.138s
-
----VOTING PROTOCOL---
-Progress: ||||||||||
-NODES ENTERING | TIME TAKEN
-             1 | 110ms
-             2 | 222ms
-             3 | 332ms
-             4 | 453ms
-             5 | 554ms
-             6 | 662ms
-             7 | 771ms
-             8 | 871ms
-             9 | 989ms
-            10 | 1.087s
-```
 
 
 
