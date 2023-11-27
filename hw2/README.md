@@ -10,6 +10,10 @@ The `Orchestrator` allows us a convenient interface to simulate various test cas
 - An example is in `Orchestrator_test.go`, which tests the orchestrator using the above naive implementation and ensures that it successfully detects the resulting breach of the safety condition.
 
 ## Usage
+The actual implementations are in:
+- Lamport's Shared Priority Queue: `nodetypes/LamportSharedPriorityQueue.go`
+- Ricart & Agrawala's Optimisation: `nodetypes/RicartAndAgrawalaSharedPriorityQueue.go`
+- Voting Protocol: `nodetypes/VotingProtocol.go`
 
 ### Testing (Grading)
 The tester code for grading is in `DEMO_test.go`.
@@ -249,12 +253,6 @@ This should have the following output:
 PASS
 ok      1005129_RYAN_TOH/hw2    79.783s
 ```
-
-
-
-
-
-
 
 ## Implementation Notes
 ### Lamport's Shared Priority Queue
