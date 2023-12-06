@@ -108,14 +108,17 @@ func (cm *CentralManager) Listen() {
 		select {
 		case msg, ok := <-cm.centralPort.RecvChan:
 			cm.cmStateLock.Lock()
+			cm.aliveStateLock.Lock()
 			cmState := cm.cmState
+			alive := cm.alive
+			cm.aliveStateLock.Unlock()
 			cm.cmStateLock.Unlock()
 			if !ok {
 				requesthandlerExit <- true
 				log.Printf("CM: recvChan closed.")
 				return
 			}
-			if !cm.alive {
+			if !alive {
 				// Drop message since we're DEAD
 				continue
 			}
@@ -145,14 +148,17 @@ func (cm *CentralManager) Listen() {
 			}
 		case msg, ok := <-cm.internalPort.RecvChan:
 			cm.cmStateLock.Lock()
+			cm.aliveStateLock.Lock()
 			cmState := cm.cmState
+			alive := cm.alive
+			cm.aliveStateLock.Unlock()
 			cm.cmStateLock.Unlock()
 			if !ok {
 				requesthandlerExit <- true
 				log.Printf("CM: recvChan closed.")
 				return
 			}
-			if !cm.alive {
+			if !alive {
 				// Drop message since we're DEAD
 				continue
 			}
@@ -327,13 +333,6 @@ func (cm *CentralManager) startElection() {
 			// Timeout
 			electionWin = true
 		}
-
-		// Adjust state accordingly
-		if electionWin {
-			cm.cmStateLock.Lock()
-			cm.cmState = CM_PRIMARY
-			cm.cmStateLock.Unlock()
-		}
 	} else {
 		// If we're a primary, we win by default
 		electionWin = true
@@ -341,8 +340,12 @@ func (cm *CentralManager) startElection() {
 
 	// Broadcast victory
 	if electionWin {
+		cm.cmStateLock.Lock()
+		cm.cmState = CM_PRIMARY
+		cm.cmStateLock.Unlock()
 		//log.Printf("CM%d: Won election. Broadcasting win.", cm.cmId)
 		for nodeId := range cm.nodes {
+			log.Printf("CM%d: Sent win to N%d.", cm.cmId, nodeId)
 			cm.electionStateLock.Lock()
 			if cm.electionId == "" {
 				cm.electionId = cm.generateElectionId()
@@ -391,7 +394,8 @@ func (cm *CentralManager) recvReadRequest(rdrId NodeId, pageId PageId, reqId str
 
 	// If currently processing another request, drop this.
 	cm.requestStateLock.Lock()
-	if cm.requestState != REQUEST_IDLE {
+	if cm.requestState != REQUEST_IDLE && cm.requestId != reqId {
+		log.Printf("CM%d: Dropped RQ(N%d, P%d, %v), currently handling request %v.", cm.cmId, rdrId, pageId, reqId, cm.requestId)
 		cm.requestStateLock.Unlock()
 		return
 	}
@@ -419,6 +423,8 @@ func (cm *CentralManager) recvReadRequest(rdrId NodeId, pageId PageId, reqId str
 		panic(fmt.Sprintf("CM%d: Non-existent owner for page P%d.", cm.cmId, pageId))
 	}
 	cm.send(reqId, MSG_RF, rdrId, ownerId, pageId)
+
+	//TODO: HOW to get this part, if backup takes over at this point?
 	
 	// 3. Block until we receive RC from reader
 	rc_rcvd := false
@@ -465,11 +471,12 @@ func (cm *CentralManager) recvWriteRequest(wtrId NodeId, pageId PageId, reqId st
 
 	// If currently processing another request, drop this.
 	cm.requestStateLock.Lock()
-	if cm.requestState != REQUEST_IDLE {
+	if cm.requestState != REQUEST_IDLE && cm.requestId != reqId {
+		log.Printf("CM%d: Dropped WQ(N%d, P%d, %v), currently handling request %v.", cm.cmId, wtrId, pageId, reqId, cm.requestId)
 		cm.requestStateLock.Unlock()
 		return
 	}
-	cm.requestState = REQUEST_RQ
+	cm.requestState = REQUEST_WQ
 	cm.requestId = reqId
 	cm.requestPageId = pageId
 	cm.requestStateLock.Unlock()

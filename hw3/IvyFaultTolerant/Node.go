@@ -111,18 +111,72 @@ func (n *Node) Listen() {
 				return
 			}
 
-			//log.Printf("N%d: Received %v from N%d for P%d.", n.nodeId, GetMessageType(msg.MsgType), msg.SrcId, msg.PageId)
+			//log.Printf("N%d: Received %v from N%d for P%d (ID: %v).", n.nodeId, GetMessageType(msg.MsgType), msg.SrcId, msg.PageId, msg.MsgId)
 
 			switch msg.MsgType {
 			// Standard IVY Messages: SrcID = Reader or Writer Node Id
 			case MSG_RP, MSG_WP, MSG_WI:
+				n.requestLock.Lock()
+				if n.requestState == REQUEST_IDLE {
+					panic(fmt.Sprintf("N%d: Received %v from N%d, but request state is idle", n.nodeId, GetMessageType(msg.MsgType), msg.SrcId))
+				}
+				n.requestLock.Unlock()
 				n.incomingPageMsgChan <- msg
 			case MSG_RF:
-				n.recvReadForward(msg.SrcId, msg.PageId, msg.MsgId)
+				// Received READ_FORWARD
+				rdrId := msg.SrcId; pageId := msg.PageId; reqId := msg.MsgId
+				n.ensureCachedPageExists(pageId)
+				_, err := n.getCachedPage(pageId)
+				if err != nil {
+					panic(fmt.Sprintf("N%d: Received %v for invalid page P%d. (%v)", n.nodeId, GetMessageType(msg.MsgType), pageId, reqId))
+				}
+
+				n.cache[pageId].pageLock.Lock()
+				n.cache[pageId].access = ACCESS_READONLY
+				n.sendToNode(reqId, MSG_RP, rdrId, pageId, n.cache[pageId].page.Data)
+				n.cache[pageId].pageLock.Unlock()
+				log.Printf("N%d: P%d sent to N%d for READ", n.nodeId, pageId, rdrId)
 			case MSG_WF:
-				n.recvWriteForward(msg.SrcId, msg.PageId, msg.MsgId)
+				// Received WRITE_FORWARD
+				wtrId := msg.SrcId; pageId := msg.PageId; reqId := msg.MsgId
+				if wtrId == n.nodeId {
+					// Requesting write for self
+					// If WF to self, we can just send it straight to our incoming page msg chan
+					n.incomingPageMsgChan <- NewMessageWithData(reqId, MSG_WP, n.nodeId, pageId, n.cache[pageId].page.Data)
+					continue
+				}
+				
+				n.ensureCachedPageExists(pageId)
+				_, err := n.getCachedPage(pageId)
+				if err != nil {
+					panic(fmt.Sprintf("N%d: Received %v for invalid page P%d. (%v): %v", n.nodeId, GetMessageType(msg.MsgType), pageId, reqId, err))
+				}
+
+				n.cache[pageId].pageLock.Lock()
+				n.cache[pageId].access = ACCESS_INVALID
+				
+				n.sendToNode(reqId, MSG_WP, wtrId, pageId, n.cache[pageId].page.Data)
+				n.cache[pageId].pageLock.Unlock()
+				log.Printf("N%d: P%d invalidated and sent to N%d for WRITE.", n.nodeId, pageId, wtrId)
 			case MSG_IV:
-				n.recvInvalidate(msg.SrcId, msg.PageId, msg.MsgId)
+				// Received INVALIDATION
+				wtrId := msg.SrcId; pageId := msg.PageId; reqId := msg.MsgId
+				n.ensureCachedPageExists(pageId)
+
+				// If we're the writer, then the writer already owns the lock. Just acknowledge the invalidation.
+				if wtrId == n.nodeId {
+					n.cache[pageId].access = ACCESS_INVALID
+					n.sendToManager(reqId, MSG_IC, pageId)
+					log.Printf("N%d: P%d invalidated.", n.nodeId, pageId)
+					continue
+				}
+
+				n.cache[pageId].pageLock.Lock()
+				n.cache[pageId].access = ACCESS_INVALID
+				n.sendToManager(reqId, MSG_IC, pageId)
+				n.cache[pageId].pageLock.Unlock()
+				log.Printf("N%d: P%d invalidated.", n.nodeId, pageId)
+				
 			case MSG_RC_ACK:
 				n.requestLock.Lock()
 				if msg.MsgId == n.requestId && n.requestState == REQUEST_RQ {
@@ -160,71 +214,12 @@ func (n *Node) Listen() {
 			default:
 				panic(fmt.Sprintf("N%d: Received unexpected message %v from N%d", n.nodeId, GetMessageType(msg.MsgType), msg.SrcId))
 			}
+			//log.Printf("N%d: Message handled (ID %v)", n.nodeId, msg.MsgId)
 		case <-n.exit:
 			log.Printf("N%d: Exiting.", n.nodeId)
 			return
 		}
 	}
-}
-
-func (n *Node) recvReadForward(rdrId NodeId, pageId PageId, reqId string) {
-	n.ensureCachedPageExists(pageId)
-	_, err := n.getCachedPage(pageId)
-	if err != nil {
-		panic(fmt.Sprintf("N%d: Received RF for invalid page P%d from N%d.", n.nodeId, pageId, rdrId))
-	}
-
-	// 1. Obtain local page lock
-	n.cache[pageId].pageLock.Lock(); n.cache[pageId].pageLock.Unlock()
-
-	// 2. Set page to READ_ONLY
-	n.cache[pageId].access = ACCESS_READONLY
-
-	// 3. Send RP to the reader
-	n.sendToNode(reqId, MSG_RP, rdrId, pageId, n.cache[pageId].page.Data)
-
-	log.Printf("N%d: P%d sent to N%d for READ.", n.nodeId, pageId, rdrId)
-}
-
-func (n *Node) recvWriteForward(wtrId NodeId, pageId PageId, reqId string) {
-	n.ensureCachedPageExists(pageId)
-	_, err := n.getCachedPage(pageId)
-	if err != nil {
-		panic(fmt.Sprintf("N%d: Received WF for invalid page P%d from N%d.", n.nodeId, pageId, wtrId))
-	}
-
-	// 1. Obtain local page lock
-	n.cache[pageId].pageLock.Lock(); n.cache[pageId].pageLock.Unlock()
-
-	// 2. Set page to INVALID
-	n.cache[pageId].access = ACCESS_INVALID
-
-	// 3. Send WP to the reader
-	n.sendToNode(reqId, MSG_WP, wtrId, pageId, n.cache[pageId].page.Data)
-
-	log.Printf("N%d: P%d invalidated and sent to N%d for WRITE.", n.nodeId, pageId, wtrId)
-}
-
-func (n *Node) recvInvalidate(wtrId NodeId, pageId PageId, reqId string) {
-	n.ensureCachedPageExists(pageId)
-
-	// 0. If the reason for invalidation is OUR own write, then the writing goroutine already holds the lock, AND has already invalidated the page. we can just immediately send an invalidation confirmation.
-	if wtrId == n.nodeId {
-		n.sendToManager(reqId, MSG_IC, pageId)
-		log.Printf("N%d: P%d invalidated.", n.nodeId, pageId)
-		return
-	}
-
-	// 1. Obtain local page lock
-	n.cache[pageId].pageLock.Lock(); n.cache[pageId].pageLock.Unlock()
-
-	// 2. Set page to INVALID
-	n.cache[pageId].access = ACCESS_INVALID
-
-	// 3. Send invalidate confirmation
-	n.sendToManager(reqId, MSG_IC, pageId)
-
-	log.Printf("N%d: P%d invalidated.", n.nodeId, pageId)
 }
 
 func (n *Node) RequestRead(pageId PageId, reqId string){
@@ -263,6 +258,8 @@ func (n *Node) RequestRead(pageId PageId, reqId string){
 		}
 	case <-timer.C:
 		// Timeout
+		log.Printf("N%d: Timeout on request read.", n.nodeId)
+		
 		n.cmIdLock.Lock()
 		n.cmId = InvalidNodeId
 		n.cmIdLock.Unlock()
@@ -295,9 +292,16 @@ func (n *Node) requestReadConfirm(pageId PageId, reqId string) {
 		timer.Stop()
 	case <-timer.C:
 		// Timeout
+		log.Printf("N%d: Timeout on request read confirm.", n.nodeId)
+		
 		n.cmIdLock.Lock()
 		n.cmId = InvalidNodeId
 		n.cmIdLock.Unlock()
+
+		// Reset request
+		n.requestLock.Lock()
+		n.requestState = REQUEST_IDLE
+		n.requestLock.Unlock()
 
 		n.StartElection() // This blocks until the election is done
 
@@ -344,7 +348,12 @@ func (n *Node) RequestWrite(pageId PageId, reqId string) {
 		timer.Stop()
 		if recv_page_msg.MsgType == MSG_WP {
 			timer.Stop()
-			page = NewPage(recv_page_msg.PageId, recv_page_msg.Data)
+			if recv_page_msg.SrcId == n.nodeId {
+				// We're the owner
+				page = n.cache[pageId].page
+			} else {
+				page = NewPage(recv_page_msg.PageId, recv_page_msg.Data)
+			}
 		} else if recv_page_msg.MsgType == MSG_WI {
 			timer.Stop()
 			if recv_page_msg.PageId == pageId {
@@ -356,12 +365,18 @@ func (n *Node) RequestWrite(pageId PageId, reqId string) {
 		} else {
 			panic(fmt.Sprintf("N%d: Got message type %v, expected MSG_WP", n.nodeId, GetMessageType(recv_page_msg.MsgType)))
 		}
-		page = NewPage(recv_page_msg.PageId, recv_page_msg.Data)
 	case <-timer.C:
 		// Timeout
+		log.Printf("N%d: Timeout on request write.", n.nodeId)
+		
 		n.cmIdLock.Lock()
 		n.cmId = InvalidNodeId
 		n.cmIdLock.Unlock()
+
+		// Reset request
+		n.requestLock.Lock()
+		n.requestState = REQUEST_IDLE
+		n.requestLock.Unlock()
 
 		n.StartElection() // This blocks until the election is done
 
@@ -391,6 +406,8 @@ func (n *Node) requestWriteConfirm(pageId PageId, reqId string) {
 		timer.Stop()
 	case <-timer.C:
 		// Timeout
+		log.Printf("N%d: Timeout on request write confirm for %v.", n.nodeId, reqId)
+		
 		n.cmIdLock.Lock()
 		n.cmId = InvalidNodeId
 		n.cmIdLock.Unlock()
@@ -431,11 +448,12 @@ func (n *Node) sendToNode(msgId string, msgType MsgType, dstId NodeId, pageId Pa
 	}
 	msg := NewMessageWithData(msgId, msgType, n.nodeId, pageId, pageData)
 	n.nodes[dstId].RecvChan <- msg
-	//log.Printf("N%d: Send %v for P%d to N%d.", n.nodeId, GetMessageType(msgType), pageId, dstId)
 }
 
 func (n *Node) StartElection() NodeId {
+	n.cmIdLock.Lock()
 	cmId := n.cmId
+	n.cmIdLock.Unlock()
 	if cmId == InvalidNodeId {
 		log.Printf("N%d: Start election.", n.nodeId)
 		// Start an election
@@ -451,7 +469,7 @@ func (n *Node) StartElection() NodeId {
 			n.cmIdLock.Unlock()
 		}
 	}
-	// log.Printf("N%d: Election completed, detected CM%d.", n.nodeId, n.cmId)
+	//log.Printf("N%d: Election completed, detected CM%d.", n.nodeId, n.cmId)
 	return cmId
 }
 

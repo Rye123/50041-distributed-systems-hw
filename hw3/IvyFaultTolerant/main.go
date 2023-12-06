@@ -46,6 +46,22 @@ func (s *System) Init() {
 	}
 }
 
+func (s *System) KillCM(cmId NodeId) {
+	if cmId == -1 {
+		go s.cm1.Kill()
+	} else if cmId == -2 {
+		go s.cm2.Kill()
+	}
+}
+
+func (s *System) RebootCM(cmId NodeId) {
+	if cmId == -1 {
+		go s.cm1.Reboot()
+	} else if cmId == -2 {
+		go s.cm2.Reboot()
+	}
+}
+
 func (s *System) Exit() {
 	for _, node := range s.nodes {
 		node.exit <- true
