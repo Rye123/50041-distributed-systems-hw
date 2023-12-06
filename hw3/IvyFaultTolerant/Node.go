@@ -210,7 +210,7 @@ func (n *Node) Listen() {
 				n.cmIdLock.Lock()
 				n.cmId = msg.SrcId
 				n.cmIdLock.Unlock()
-				log.Printf("N%d: CM%d set as Central Manager.", n.nodeId, n.cmId)
+				//log.Printf("N%d: CM%d set as Central Manager.", n.nodeId, n.cmId)
 			default:
 				panic(fmt.Sprintf("N%d: Received unexpected message %v from N%d", n.nodeId, GetMessageType(msg.MsgType), msg.SrcId))
 			}

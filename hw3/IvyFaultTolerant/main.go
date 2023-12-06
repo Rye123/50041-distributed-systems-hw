@@ -48,17 +48,17 @@ func (s *System) Init() {
 
 func (s *System) KillCM(cmId NodeId) {
 	if cmId == -1 {
-		go s.cm1.Kill()
+		s.cm1.Kill()
 	} else if cmId == -2 {
-		go s.cm2.Kill()
+		s.cm2.Kill()
 	}
 }
 
 func (s *System) RebootCM(cmId NodeId) {
 	if cmId == -1 {
-		go s.cm1.Reboot()
+		s.cm1.Reboot()
 	} else if cmId == -2 {
-		go s.cm2.Reboot()
+		s.cm2.Reboot()
 	}
 }
 

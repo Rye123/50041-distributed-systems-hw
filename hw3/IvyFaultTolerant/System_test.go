@@ -63,7 +63,7 @@ func testDataConsistent(s *System, pageId PageId) (string, bool) {
 }
 
 func TestStandardUsage(t *testing.T) {
-	tLog := useTempLog(t, false)
+	tLog := useTempLog(t, true)
 	
 	sys := NewSystem(10)
 	sys.Init()

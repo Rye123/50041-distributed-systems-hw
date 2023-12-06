@@ -35,8 +35,9 @@ type CentralManager struct {
 	
 	pageRecords map[PageId](*PageRecord)
 
-	confirmations map[NodeId]Message // Confirmations from other nodes, reset prior to every request.e. This is all the CM needs to wait for.
-	confirmationsLock *sync.Mutex
+	invalCount int
+	invalExpected int
+	invalLock *sync.Mutex
 
 	electionOngoing bool
 	electionId string
@@ -44,6 +45,7 @@ type CentralManager struct {
 	electionStateLock *sync.Mutex
 
 	requestState RequestState
+	requestorId NodeId
 	requestId string
 	requestPageId PageId
 	requestStateLock *sync.Mutex
@@ -66,9 +68,9 @@ func NewCentralManager(cmId NodeId, centralPort NodePort, internalPort InternalP
 		centralPort, nodePorts, // Communication with Nodes
 		internalPort, otherInternalPort, // Communication between CMs
 		make(map[PageId](*PageRecord)),
-		make(map[NodeId]Message), &sync.Mutex{},
+		0, 0, &sync.Mutex{},
 		false, "", make(chan bool, 1), &sync.Mutex{},
-		REQUEST_IDLE, "", InvalidPageId, &sync.Mutex{},
+		REQUEST_IDLE, InvalidNodeId, "", InvalidPageId, &sync.Mutex{},
 		0, &sync.Mutex{},
 		true, &sync.Mutex{}, exit,
 	}
@@ -76,25 +78,43 @@ func NewCentralManager(cmId NodeId, centralPort NodePort, internalPort InternalP
 
 func (cm *CentralManager) Reboot() {
 	cm.aliveStateLock.Lock(); defer cm.aliveStateLock.Unlock()
-	cm.confirmationsLock.Lock(); defer cm.confirmationsLock.Unlock()
-	cm.counterLock.Lock(); defer cm.confirmationsLock.Unlock()
+	cm.invalLock.Lock(); defer cm.invalLock.Unlock()
+	cm.counterLock.Lock(); defer cm.counterLock.Unlock()
 	cm.requestStateLock.Lock(); defer cm.requestStateLock.Unlock()
-	cm.electionStateLock.Lock(); defer cm.electionStateLock.Unlock()
+	cm.cmStateLock.Lock(); defer cm.cmStateLock.Unlock()
+	cm.electionStateLock.Lock()
 	cm.electionOngoing = false
 	cm.electionId = ""
 	cm.electionNoRecvChan = make(chan bool, 1)
+	cm.electionStateLock.Unlock()
 	cm.requestState = REQUEST_IDLE
 	cm.requestId = ""
+	cm.requestorId = InvalidNodeId
 	cm.requestPageId = InvalidPageId
 	cm.counter = 0
-	cm.confirmations = make(map[NodeId]Message)
+	cm.invalCount = 0
+	cm.invalExpected = 0
 	cm.pageRecords = make(map[PageId](*PageRecord))
 	cm.alive = true
+	cm.cmState = CM_BACKUP
+	go cm.startElection()
+
+	// Don't return until election is over
+	for {
+		cm.electionStateLock.Lock()
+		if !cm.electionOngoing {
+			cm.electionStateLock.Unlock()
+			break
+		}
+		cm.electionStateLock.Unlock()
+	}
+	log.Printf("CM%d: Rebooted.", cm.cmId)
 }
 
 func (cm *CentralManager) Kill() {
 	cm.aliveStateLock.Lock(); defer cm.aliveStateLock.Unlock()
 	cm.alive = false
+	log.Printf("CM%d: Killed.", cm.cmId)
 }
 
 func (cm *CentralManager) Listen() {
@@ -131,15 +151,27 @@ func (cm *CentralManager) Listen() {
 				// Handover to RequestHandler
 				msg := msg
 				go func() { requestChan <- msg }()
-			case MSG_RC, MSG_WC, MSG_IC:
+			case MSG_IC:
 				if cmState == CM_BACKUP {
-					panic(fmt.Sprintf("CM%d: Received MSG_RC, MSG_WC or MSG_IC as Backup.", cm.cmId))
+					panic(fmt.Sprintf("CM%d: Received MSG_IC as Backup.", cm.cmId))
 				}
 
-				// Indicate to goroutine to carry out necessary operations
-				cm.confirmationsLock.Lock()
-				cm.confirmations[msg.SrcId] = msg
-				cm.confirmationsLock.Unlock()
+				cm.recvInvalConfirm(msg.SrcId, msg.PageId, msg.MsgId)
+
+			case MSG_RC:
+				if cmState == CM_BACKUP {
+					panic(fmt.Sprintf("CM%d: Received MSG_RC as Backup.", cm.cmId))
+				}
+
+				cm.recvReadConfirm(msg.SrcId, msg.PageId, msg.MsgId)
+				
+			case MSG_WC:
+				if cmState == CM_BACKUP {
+					panic(fmt.Sprintf("CM%d: Received MSG_WC as Backup.", cm.cmId))
+				}
+
+				cm.recvWriteConfirm(msg.SrcId, msg.PageId, msg.MsgId)
+				
 			case MSG_EL:
 				// Start election
 				go cm.startElection()
@@ -168,11 +200,14 @@ func (cm *CentralManager) Listen() {
 				//log.Printf("CM%d: Received ELECT_ME from other CM%d.", cm.cmId, msg.SrcId)
 				if cmState == CM_PRIMARY {
 					// Send ELECT_NO
+					cm.sendEmptyUpdateMsgToCM()
 					cm.sendElectionMsgToCM(msg.MsgId, MSG_CM_ELECT_NO)
+					// Send update
 				} else {
 					// Here, we're also a backup.
 					if cm.cmId > msg.SrcId {
 						// Send ELECT_NO
+						cm.sendEmptyUpdateMsgToCM()
 						cm.sendElectionMsgToCM(msg.MsgId, MSG_CM_ELECT_NO)
 					}
 					// Otherwise, drop the message
@@ -187,109 +222,143 @@ func (cm *CentralManager) Listen() {
 				}
 				cm.electionNoRecvChan <- true
 				cm.electionStateLock.Unlock()
+
+			case MSG_CM_UPDATE:
+				if cmState == CM_PRIMARY {
+					panic(fmt.Sprintf("CM%d: Received CM_UPDATE as Primary.", cm.cmId))
+				}
+				log.Printf("CM%d: Updated.", cm.cmId)
+
+				for pageId, ownerId := range msg.SrcOwners {
+					cm.ensureRecordExists(pageId)
+					cm.pageRecords[pageId].ownerId = ownerId
+				}
+				
+				for pageId, copyset := range msg.SrcCopysets {
+					cm.pageRecords[pageId].copySet = copyset
+				}
 				
 			case MSG_CM_RQ_RECV:
+				// Received RQ_RECV.
+				// Possible cases: Backup is in REQUEST_IDLE.
+				
 				if cmState == CM_PRIMARY {
 					panic(fmt.Sprintf("CM%d: Received RQ_RECV as Primary.", cm.cmId))
 				}
 				
 				cm.requestStateLock.Lock()
 				if cm.requestState != REQUEST_IDLE {
-					panic(fmt.Sprintf("CM%d: Received RQ_RECV from primary when currently handling another.", cm.cmId))
+					// Not possible!
+					panic(fmt.Sprintf("CM%d: Received RQ_RECV (%v) from primary when NOT idle (handling %v).", cm.cmId, msg.MsgId, cm.requestId))
 				}
+
 				cm.requestId = msg.MsgId
 				cm.requestState = REQUEST_RQ
 				cm.requestPageId = msg.PageId
-				
-				for pageId, copyset := range msg.SrcCopysets {
-					cm.ensureRecordExists(pageId)
-					if pageId == cm.requestPageId {
-						cm.pageRecords[pageId].copySet = append(copyset, msg.SrcId)
-					} else {
-						cm.pageRecords[pageId].copySet = copyset
-					}
-				}
+				cm.requestorId = msg.SrcId // Update msgs have a srcId of the node
 
 				for pageId, ownerId := range msg.SrcOwners {
+					cm.ensureRecordExists(pageId)
 					cm.pageRecords[pageId].ownerId = ownerId
+				}
+				
+				for pageId, copyset := range msg.SrcCopysets {
+					cm.pageRecords[pageId].copySet = copyset
 				}
 				
 				cm.requestStateLock.Unlock()
 			case MSG_CM_RC_RECV:
+				// Received RC_RECV.
+				// Possible cases: Backup is in REQUEST_IDLE (just rebooted), or in REQUEST_RQ (saw the earlier RQ)
+				
 				if cmState == CM_PRIMARY {
 					panic(fmt.Sprintf("CM%d: Received RC_RECV as Primary.", cm.cmId))
 				}
 				cm.requestStateLock.Lock()
-				if cm.requestState != REQUEST_RQ {
-					panic(fmt.Sprintf("CM%d: Received RC_RECV from primary when currently NOT handling read request.", cm.cmId))
+				if cm.requestState == REQUEST_WQ {
+					// Not possible!
+					panic(fmt.Sprintf("CM%d: Received RC_RECV (%v) from primary when currently handling WQ %v.", cm.cmId, msg.MsgId, cm.requestId))
 				}
-				if cm.requestId != msg.MsgId {
-					panic(fmt.Sprintf("CM%d: Received RC_RECV %v from primary, expected %v.", cm.cmId, msg.MsgId, cm.requestId))
+
+				if cm.requestState == REQUEST_RQ && cm.requestId != msg.MsgId {
+					// Not possible: We already recorded a request, but suddenly primary sends us a confirmation for another?
+					panic(fmt.Sprintf("CM%d: Received RC_RECV (%v) from primary when expecting RC %v.", cm.cmId, msg.MsgId, cm.requestId))
 				}
 
 				cm.requestId = ""
 				cm.requestState = REQUEST_IDLE
 				cm.requestPageId = InvalidPageId
-				
-				for pageId, copyset := range msg.SrcCopysets {
-					cm.ensureRecordExists(pageId)
-					cm.pageRecords[pageId].copySet = copyset
-				}
+				cm.requestorId = InvalidNodeId
 
 				for pageId, ownerId := range msg.SrcOwners {
+					cm.ensureRecordExists(pageId)
 					cm.pageRecords[pageId].ownerId = ownerId
 				}
+				
+				for pageId, copyset := range msg.SrcCopysets {
+					cm.pageRecords[pageId].copySet = copyset
+				}
+				
 				cm.requestStateLock.Unlock()
 			case MSG_CM_WQ_RECV:
+				// Received WQ_RECV.
+				// Possible cases: Backup is in REQUEST_IDLE.
+				
 				if cmState == CM_PRIMARY {
 					panic(fmt.Sprintf("CM%d: Received WQ_RECV as Primary.", cm.cmId))
 				}
 				cm.requestStateLock.Lock()
+
 				if cm.requestState != REQUEST_IDLE {
-					panic(fmt.Sprintf("CM%d: Received WQ_RECV from primary when currently handling another.", cm.cmId))
+					// Not possible!
+					panic(fmt.Sprintf("CM%d: Received WQ_RECV (%v) from primary when NOT idle (handling %v).", cm.cmId, msg.MsgId, cm.requestId))
 				}
+				
 				cm.requestId = msg.MsgId
 				cm.requestState = REQUEST_WQ
 				cm.requestPageId = msg.PageId
-				
-				for pageId, copyset := range msg.SrcCopysets {
-					cm.ensureRecordExists(pageId)
-					if pageId == cm.requestPageId {
-						cm.pageRecords[pageId].copySet = append(copyset, msg.SrcId)
-					} else {
-						cm.pageRecords[pageId].copySet = copyset
-					}
-				}
+				cm.requestorId = msg.SrcId // Update msgs have a srcId of the node
 
 				for pageId, ownerId := range msg.SrcOwners {
+					cm.ensureRecordExists(pageId)
 					cm.pageRecords[pageId].ownerId = ownerId
+				}
+				
+				for pageId, copyset := range msg.SrcCopysets {
+					cm.pageRecords[pageId].copySet = copyset
 				}
 				
 				cm.requestStateLock.Unlock()
 			case MSG_CM_WC_RECV:
+				// Received WC_RECV.
+				// Possible cases: Backup is in REQUEST_IDLE (just rebooted), or in REQUEST_WQ (saw the earlier WQ)
+				
 				if cmState == CM_PRIMARY {
 					panic(fmt.Sprintf("CM%d: Received WC_RECV as Primary.", cm.cmId))
 				}
 				cm.requestStateLock.Lock()
-				if cm.requestState != REQUEST_WQ {
-					panic(fmt.Sprintf("CM%d: Received WC_RECV from primary when currently NOT handling write request.", cm.cmId))
+				if cm.requestState == REQUEST_RQ {
+					// Not possible!
+					panic(fmt.Sprintf("CM%d: Received WC_RECV (%v) from primary when currently handling RQ %v.", cm.cmId, msg.MsgId, cm.requestId))
 				}
-				if cm.requestId != msg.MsgId {
-					panic(fmt.Sprintf("CM%d: Received WC_RECV %v from primary, expected %v.", cm.cmId, msg.MsgId, cm.requestId))
+
+				if cm.requestState == REQUEST_WQ && cm.requestId != msg.MsgId {
+					// Not possible: We already recorded a request, but suddenly primary sends us a confirmation for another?
+					panic(fmt.Sprintf("CM%d: Received WC_RECV (%v) from primary when expecting WC %v.", cm.cmId, msg.MsgId, cm.requestId))
 				}
 
 				cm.requestId = ""
 				cm.requestState = REQUEST_IDLE
 				cm.requestPageId = InvalidPageId
-				
-				for pageId, copyset := range msg.SrcCopysets {
-					cm.ensureRecordExists(pageId)
-					// This should be the empty copyset
-					cm.pageRecords[pageId].copySet = copyset
-				}
+				cm.requestorId = InvalidNodeId
 
 				for pageId, ownerId := range msg.SrcOwners {
+					cm.ensureRecordExists(pageId)
 					cm.pageRecords[pageId].ownerId = ownerId
+				}
+				
+				for pageId, copyset := range msg.SrcCopysets {
+					cm.pageRecords[pageId].copySet = copyset
 				}
 				cm.requestStateLock.Unlock()
 				
@@ -343,9 +412,8 @@ func (cm *CentralManager) startElection() {
 		cm.cmStateLock.Lock()
 		cm.cmState = CM_PRIMARY
 		cm.cmStateLock.Unlock()
-		//log.Printf("CM%d: Won election. Broadcasting win.", cm.cmId)
+		log.Printf("CM%d: Won election.", cm.cmId)
 		for nodeId := range cm.nodes {
-			log.Printf("CM%d: Sent win to N%d.", cm.cmId, nodeId)
 			cm.electionStateLock.Lock()
 			if cm.electionId == "" {
 				cm.electionId = cm.generateElectionId()
@@ -388,30 +456,29 @@ func (cm *CentralManager) RequestHandler(requestChan chan Message, exitChan chan
 }
 
 func (cm *CentralManager) recvReadRequest(rdrId NodeId, pageId PageId, reqId string) {
-	log.Printf("CM%d: Received RQ(N%d, P%d)", cm.cmId, rdrId, pageId)
+	log.Printf("CM%d: Received RQ(N%d, P%d, %v)", cm.cmId, rdrId, pageId, reqId)
 	cm.ensureRecordExists(pageId)
 	cm.pageRecords[pageId].recordLock.Lock(); defer cm.pageRecords[pageId].recordLock.Unlock()
 
 	// If currently processing another request, drop this.
 	cm.requestStateLock.Lock()
-	if cm.requestState != REQUEST_IDLE && cm.requestId != reqId {
-		log.Printf("CM%d: Dropped RQ(N%d, P%d, %v), currently handling request %v.", cm.cmId, rdrId, pageId, reqId, cm.requestId)
-		cm.requestStateLock.Unlock()
-		return
+	if cm.requestState != REQUEST_IDLE {
+		if cm.requestState == REQUEST_RQ && cm.requestId == reqId {
+			log.Printf("CM%d: Received retransmission of request %v. Handling.", cm.cmId, reqId)
+		} else {
+			log.Printf("CM%d: Dropped RQ(N%d, P%d, %v), currently handling request %v.", cm.cmId, rdrId, pageId, reqId, cm.requestId)
+			cm.requestStateLock.Unlock()
+			return
+		}
 	}
 	cm.requestState = REQUEST_RQ
+	cm.requestorId = rdrId
 	cm.requestId = reqId
 	cm.requestPageId = pageId
 	cm.requestStateLock.Unlock()
 
 	// Forward request to replica
 	cm.sendUpdateMsgToCM(reqId, MSG_CM_RQ_RECV, rdrId, pageId)
-
-	// reset confirmations
-	cm.confirmationsLock.Lock()
-	cm.confirmations = make(map[NodeId]Message)
-	cm.confirmationsLock.Unlock()
-
 	if rdrId == cm.pageRecords[pageId].ownerId { panic(fmt.Sprintf("CM%d: Owner N%d requested to read own page", cm.cmId, rdrId))}
 	
 	// 1. Add reader to copyset
@@ -423,41 +490,28 @@ func (cm *CentralManager) recvReadRequest(rdrId NodeId, pageId PageId, reqId str
 		panic(fmt.Sprintf("CM%d: Non-existent owner for page P%d.", cm.cmId, pageId))
 	}
 	cm.send(reqId, MSG_RF, rdrId, ownerId, pageId)
+}
 
-	//TODO: HOW to get this part, if backup takes over at this point?
-	
-	// 3. Block until we receive RC from reader
-	rc_rcvd := false
-	for !rc_rcvd {
-		// Exit if node is killed
-		cm.aliveStateLock.Lock()
-		if !cm.alive {
-			// Drop message since we're DEAD
-			cm.aliveStateLock.Unlock()
-			return
-		}
-		cm.aliveStateLock.Unlock()
-		
-		// Check for RC
-		cm.confirmationsLock.Lock()
-		if msg, ok := cm.confirmations[rdrId]; ok {
-			if msg.MsgType == MSG_RC {
-				// if we've received a READ CONFIRM from reader
-				cm.confirmationsLock.Unlock()
-				rc_rcvd = true
-				break
-			} else {
-				panic(fmt.Sprintf("Received non-RC from N%d: %v", rdrId, GetMessageType(msg.MsgType)))
-			}
-		}
-		cm.confirmationsLock.Unlock()
+func (cm *CentralManager) recvReadConfirm(rdrId NodeId, pageId PageId, reqId string) {
+	log.Printf("CM%d: Received RC(N%d, P%d)", cm.cmId, rdrId, pageId)
+	cm.ensureRecordExists(pageId)
+	cm.pageRecords[pageId].recordLock.Lock(); defer cm.pageRecords[pageId].recordLock.Unlock()
+
+	// If not processing a request, drop the RC.
+	cm.requestStateLock.Lock()
+	if cm.requestState != REQUEST_RQ ||  cm.requestId != reqId {
+		log.Printf("CM%d: Dropped RC(N%d, P%d, %v), currently handling request %v.", cm.cmId, rdrId, pageId, reqId, cm.requestId)
+		cm.requestStateLock.Unlock()
+		return
 	}
+	cm.requestStateLock.Unlock()
 
-	// 4. Send RC_RECV to replica, send RC_ACK to node
+	// Send RC_RECV to replica, send RC_ACK to node
 	cm.sendUpdateMsgToCM(reqId, MSG_CM_RC_RECV, rdrId, pageId)
 	cm.send(reqId, MSG_RC_ACK, cm.cmId, rdrId, pageId)
-	log.Printf("CM%d: Completed RQ(N%d, P%d)", cm.cmId, rdrId, pageId)
+	log.Printf("CM%d: Completed RQ(N%d, P%d, %v)", cm.cmId, rdrId, pageId, reqId)
 	cm.requestStateLock.Lock()
+	cm.requestorId = InvalidNodeId
 	cm.requestId = ""
 	cm.requestState = REQUEST_IDLE
 	cm.requestPageId = InvalidPageId
@@ -465,18 +519,23 @@ func (cm *CentralManager) recvReadRequest(rdrId NodeId, pageId PageId, reqId str
 }
 
 func (cm *CentralManager) recvWriteRequest(wtrId NodeId, pageId PageId, reqId string) {
-	log.Printf("CM%d: Received WQ(N%d, P%d)", cm.cmId, wtrId, pageId)
+	log.Printf("CM%d: Received WQ(N%d, P%d, %v)", cm.cmId, wtrId, pageId, reqId)
 	cm.ensureRecordExists(pageId)
 	cm.pageRecords[pageId].recordLock.Lock(); defer cm.pageRecords[pageId].recordLock.Unlock()
 
 	// If currently processing another request, drop this.
 	cm.requestStateLock.Lock()
-	if cm.requestState != REQUEST_IDLE && cm.requestId != reqId {
-		log.Printf("CM%d: Dropped WQ(N%d, P%d, %v), currently handling request %v.", cm.cmId, wtrId, pageId, reqId, cm.requestId)
-		cm.requestStateLock.Unlock()
-		return
+	if cm.requestState != REQUEST_IDLE {
+		if cm.requestState == REQUEST_WQ && cm.requestId == reqId {
+			log.Printf("CM%d: Received retransmission of request %v. Handling.", cm.cmId, reqId)
+		} else {
+			log.Printf("CM%d: Dropped WQ(N%d, P%d, %v), currently handling request %v.", cm.cmId, wtrId, pageId, reqId, cm.requestId)
+			cm.requestStateLock.Unlock()
+			return
+		}
 	}
 	cm.requestState = REQUEST_WQ
+	cm.requestorId = wtrId
 	cm.requestId = reqId
 	cm.requestPageId = pageId
 	cm.requestStateLock.Unlock()
@@ -484,84 +543,90 @@ func (cm *CentralManager) recvWriteRequest(wtrId NodeId, pageId PageId, reqId st
 	// Forward request to replica
 	cm.sendUpdateMsgToCM(reqId, MSG_CM_WQ_RECV, wtrId, pageId)
 
-	// reset confirmations
-	cm.confirmationsLock.Lock()
-	cm.confirmations = make(map[NodeId]Message)
-	cm.confirmationsLock.Unlock()
+	if len(cm.pageRecords[pageId].copySet) == 0 {
+		// No copies in copy set, skip to write forward/init
+		log.Printf("CM%d: No copies. Sending write.", cm.cmId)
+		ownerId := cm.pageRecords[pageId].ownerId
+		if ownerId == InvalidNodeId {
+			// Send the page back with a write init (WI), since node expects a WP or WI.
+			cm.send(reqId, MSG_WI, cm.cmId, cm.requestorId, pageId)
+			log.Printf("CM: Initialised NEW page P%d with owner N%d.", pageId, cm.requestorId)
+		} else {
+			cm.send(reqId, MSG_WF, cm.requestorId, ownerId, pageId)
+		}
+		log.Printf("CM%d: Sent write forward/init.", cm.cmId)
+		return
+	}
+
+	// Reset invals
+	cm.invalLock.Lock()
+	cm.invalCount = 0
+	cm.invalExpected = len(cm.pageRecords[pageId].copySet)
+	cm.invalLock.Unlock()
 
 	// 1. Invalidate all copies
 	for _, copyId := range cm.pageRecords[pageId].copySet {
+		if cm.pageRecords[pageId].ownerId == copyId {
+			panic(fmt.Sprintf("CM%d: N%d appears in copyset, but is the owner", cm.cmId, copyId))
+		}
 		cm.send(reqId, MSG_IV, wtrId, copyId, pageId)
 	}
 
-	// 2. Block until we receive IC from all copies
-	expected_ics := len(cm.pageRecords[pageId].copySet) // shouldn't change because it's locked
-	ic_rcvd := 0
-	for ic_rcvd < expected_ics {
-		// Exit if node is killed
-		cm.aliveStateLock.Lock()
-		if !cm.alive {
-			// Drop message since we're DEAD
-			cm.aliveStateLock.Unlock()
-			return
-		}
-		cm.aliveStateLock.Unlock()
+}
 
-		// Check for IC
-		ic_rcvd = 0
-		cm.confirmationsLock.Lock()
-		for _, msg := range cm.confirmations {
-			if msg.MsgType == MSG_IC { ic_rcvd++ }
-		}
+func (cm *CentralManager) recvInvalConfirm(invId NodeId, pageId PageId, reqId string) {
+	//log.Printf("CM%d: Received IC(N%d, P%d, %v)", cm.cmId, invId, pageId, reqId)
 
-		if ic_rcvd > expected_ics {
-			panic(fmt.Sprintf("CM: Received %d ICs, expected %d", ic_rcvd, expected_ics))
-		}
-		cm.confirmationsLock.Unlock()
+	cm.invalLock.Lock(); defer cm.invalLock.Unlock()
+	cm.invalCount++
+
+	if cm.invalCount > cm.invalExpected {
+		panic(fmt.Sprintf("CM%d: Received %d ICs, expected %d.", cm.cmId, cm.invalCount, cm.invalExpected))
+	} else if cm.invalCount < cm.invalExpected {
+		return
 	}
+	
+	log.Printf("CM%d: Invalidated copies. Sending write.", cm.cmId)
 
-	// 3. Send write forward to owner
+	// Send write forward to owner
 	ownerId := cm.pageRecords[pageId].ownerId
 	if ownerId == InvalidNodeId {
 		// Send the page back with a write init (WI), since node expects a WP or WI.
-		cm.send(reqId, MSG_WI, cm.cmId, wtrId, pageId)
-		log.Printf("CM: Initialised NEW page P%d with owner N%d.", pageId, wtrId)
+		cm.send(reqId, MSG_WI, cm.cmId, cm.requestorId, pageId)
+		log.Printf("CM: Initialised NEW page P%d with owner N%d.", pageId, cm.requestorId)
 	} else {
-		cm.send(reqId, MSG_WF, wtrId, ownerId, pageId)
+		cm.send(reqId, MSG_WF, cm.requestorId, ownerId, pageId)
 	}
+	log.Printf("CM%d: Sent write forward/init.", cm.cmId)
+}
 
-	// 4. Block until we receive WC from writer
-	wc_rcvd := false
-	for !wc_rcvd {
-		// Exit if node is killed
-		cm.aliveStateLock.Lock()
-		if !cm.alive {
-			// Drop message since we're DEAD
-			cm.aliveStateLock.Unlock()
-			return
-		}
-		cm.aliveStateLock.Unlock()
+func (cm *CentralManager) recvWriteConfirm(wtrId NodeId, pageId PageId, reqId string) {
+	log.Printf("CM%d: Received WC(N%d, P%d)", cm.cmId, wtrId, pageId)
+	cm.ensureRecordExists(pageId)
+	cm.pageRecords[pageId].recordLock.Lock(); defer cm.pageRecords[pageId].recordLock.Unlock()
 
-		// Check for WC
-		cm.confirmationsLock.Lock()
-		if msg, ok := cm.confirmations[wtrId]; ok {
-			if msg.MsgType == MSG_WC {
-				// if we've received a WRITE CONFIRM from reader
-				wc_rcvd = true
-			}
-		}
-		cm.confirmationsLock.Unlock()
+	// If not processing a request, drop the WC.
+	cm.requestStateLock.Lock()
+	if cm.requestState != REQUEST_WQ ||  cm.requestId != reqId {
+		log.Printf("CM%d: Dropped WC(N%d, P%d, %v), currently handling request %v.", cm.cmId, wtrId, pageId, reqId, cm.requestId)
+		cm.requestStateLock.Unlock()
+		return
 	}
+	cm.requestStateLock.Unlock()
 
-	// 5. Set new owner
+	// Set new owner
 	cm.pageRecords[pageId].ownerId = wtrId
 
-	// 6. Send WC_RECV to replica, send WC_ACK to node
+	// Clear copyset
+	cm.pageRecords[pageId].copySet = make([]NodeId, 0)
+
+	// Send WC_RECV to replica, send WC_ACK to node
 	cm.sendUpdateMsgToCM(reqId, MSG_CM_WC_RECV, wtrId, pageId)
 	cm.send(reqId, MSG_WC_ACK, cm.cmId, wtrId, pageId)
 	
-	log.Printf("CM: Completed WQ(N%d, P%d)", wtrId, pageId)
+	log.Printf("CM: Completed WQ(N%d, P%d, %v)", wtrId, pageId, reqId)
 	cm.requestStateLock.Lock()
+	cm.requestorId = InvalidNodeId
 	cm.requestId = ""
 	cm.requestState = REQUEST_IDLE
 	cm.requestPageId = InvalidPageId
@@ -594,6 +659,20 @@ func (cm *CentralManager) sendUpdateMsgToCM(reqId string, msgType MsgType, nodeI
 	cm.otherInternalPort.RecvChan <- msg
 }
 
+func (cm *CentralManager) sendEmptyUpdateMsgToCM() {
+	copysets := make(map[PageId]([]NodeId))
+	owners := make(map[PageId]NodeId)
+	for pageId, record := range cm.pageRecords {
+		copysets[pageId] = make([]NodeId, 0)
+		for _, nodeId := range record.copySet {
+			copysets[pageId] = append(copysets[pageId], nodeId)
+		}
+		owners[pageId] = record.ownerId
+	}
+	msg := NewCMUpdate("CM_UPDATE", MSG_CM_UPDATE, InvalidNodeId, InvalidPageId, copysets, owners)
+	cm.otherInternalPort.RecvChan <- msg
+}
+
 func (cm *CentralManager) ensureRecordExists(pageId PageId) {
 	if _, ok := cm.pageRecords[pageId]; !ok {
 		cm.pageRecords[pageId] = &PageRecord{InvalidNodeId, make([]NodeId, 0), pageId, &sync.Mutex{}}
@@ -601,6 +680,10 @@ func (cm *CentralManager) ensureRecordExists(pageId PageId) {
 }
 
 func (cm *CentralManager) addToCopySet(tgtId NodeId, pageId PageId) {
+	if tgtId == cm.pageRecords[pageId].ownerId {
+		panic(fmt.Sprintf("CM%d: Tried to add the owner N%d to copyset of P%d.", cm.cmId, tgtId, pageId))
+	}
+	
 	if slices.ContainsFunc(cm.pageRecords[pageId].copySet, func(nodeId NodeId) bool {return nodeId == tgtId}) {
 		// tgtId is already in CopySet
 		return

@@ -25,6 +25,7 @@ const (
 	MSG_IC // Invalidate Confirm
 	MSG_EL // Election Start, to CM
 	MSG_ELWIN // Election Win, from CM
+	MSG_CM_UPDATE
 	MSG_CM_RQ_RECV
 	MSG_CM_RC_RECV
 	MSG_CM_WQ_RECV
@@ -68,6 +69,8 @@ func GetMessageType(msgType MsgType) string {
 		return "MSG_EL"
 	case MSG_ELWIN:
 		return "MSG_ELWIN"
+	case MSG_CM_UPDATE:
+		return "MSG_CM_UPDATE"
 	case MSG_CM_RQ_RECV:
 		return "MSG_CM_RQ_RECV"
 	case MSG_CM_RC_RECV:
@@ -93,14 +96,14 @@ type Message struct{
 }
 
 func NewMessage(msgId string, msgType MsgType, srcId NodeId, pageId PageId) Message {
-	if msgType >= MSG_CM_RQ_RECV {
+	if msgType >= MSG_CM_UPDATE {
 		panic(fmt.Sprintf("Invalid msgType for Message: %v", GetMessageType(msgType)))
 	}
 	return Message{msgId, msgType, srcId, pageId, ""}
 }
 
 func NewMessageWithData(msgId string, msgType MsgType, srcId NodeId, pageId PageId, data string) Message {
-	if msgType >= MSG_CM_RQ_RECV {
+	if msgType >= MSG_CM_UPDATE {
 		panic(fmt.Sprintf("Invalid msgType for Message: %v", GetMessageType(msgType)))
 	}
 	if msgType != MSG_RP && msgType != MSG_WP {
@@ -160,23 +163,9 @@ func NewCMElectionMessage(electionId string, msgType MsgType, srcCmId NodeId) CM
 
 // Internal message to send an update (i.e. a forwarded message)
 func NewCMUpdate(reqId string, msgType MsgType, nodeId NodeId, pageId PageId, srcCopysets map[PageId]([]NodeId), srcOwners map[PageId]NodeId) CMMessage {
-	if msgType < MSG_CM_RQ_RECV || msgType >= MSG_CM_ELECT_ME {
+	if msgType < MSG_CM_UPDATE || msgType >= MSG_CM_ELECT_ME {
 		panic(fmt.Sprintf("Invalid msgType for CM Update: %v", GetMessageType(msgType)))
 	}
-	
-	// copysets_clone := make(map[PageId]([]NodeId))
-	// for pageId, copyset := range srcCopysets {
-	// 	copyset_clone := make([]NodeId, 0)
-	// 	for _, nodeId := range copyset {
-	// 		copyset_clone = append(copyset_clone, nodeId)
-	// 	}
-	// 	copysets_clone[pageId] = copyset_clone
-	// }
-
-	// owners_clone := make(map[PageId]NodeId)
-	// for pageId, ownerId := range srcOwners {
-	// 	owners_clone[pageId] = ownerId
-	// }
 	
 	return CMMessage{reqId, msgType, nodeId, pageId, srcCopysets, srcOwners}
 }

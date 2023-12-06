@@ -3,6 +3,7 @@ package main
 import (
 	"log"
 	"testing"
+	"time"
 )
 
 func TestSingleFaultBeforeWrite(t *testing.T) {
@@ -115,7 +116,7 @@ func TestSingleFaultAfterElection(t *testing.T) {
 }
 
 
-func TestMultiFaultAndReboot(t *testing.T) {
+func TestSingleFaultAndReboot(t *testing.T) {
 	// Tests scenario where primary fails after election, and reboots, and the new primary fails.
 	tLog := useTempLog(t, false)
 
@@ -182,4 +183,107 @@ func TestMultiFaultAndReboot(t *testing.T) {
 	}
 
 	sys.Exit()
+}
+
+func TestMultiFaults(t *testing.T) {
+	// Tests scenario of multiple failures and reboots (where there's always at least one primary online)
+	tLog := useTempLog(t, false)
+
+	sys := NewSystem(10)
+	sys.Init()
+
+	// Write to a node, read from another
+	expectedData := "WRITE ONE"
+	sys.NodeWrite(1, 0, expectedData)
+	log.Printf("---TESTING IF DATA IS CONSISTENT---")
+	data, consistent := testDataConsistent(sys, 0)
+	if !consistent {
+		tLog.Dump()
+		t.Fatalf("Data not consistent.")
+	}
+	if data != expectedData {
+		tLog.Dump()
+		t.Fatalf("Read from N%d for P%d returned %v, expected %v", 1, 0, data, expectedData)
+	}
+
+	sys.KillCM(-1) // CM-2 is left, should take over during the next write
+
+	// Write to a node, read from another
+	expectedData = "WRITE TWO"
+	sys.NodeWrite(2, 0, expectedData)
+	log.Printf("---TESTING IF DATA IS CONSISTENT---")
+	data, consistent = testDataConsistent(sys, 0)
+	if !consistent {
+		tLog.Dump()
+		t.Fatalf("Data not consistent.")
+	}
+	if data != expectedData {
+		tLog.Dump()
+		t.Fatalf("Read from N%d for P%d returned %v, expected %v", 1, 0, data, expectedData)
+	}
+
+	sys.RebootCM(-1) // CM-2 should still be the primary
+	time.Sleep(1)
+	sys.KillCM(-2) // CM-1 is left, should take over during the next write
+	expectedData = "WRITE THREE"
+	sys.NodeWrite(3, 0, expectedData)
+	log.Printf("---TESTING IF DATA IS CONSISTENT---")
+	data, consistent = testDataConsistent(sys, 0)
+	if !consistent {
+		tLog.Dump()
+		t.Fatalf("Data not consistent.")
+	}
+	if data != expectedData {
+		tLog.Dump()
+		t.Fatalf("Read from N%d for P%d returned %v, expected %v", 1, 0, data, expectedData)
+	}
+
+	sys.RebootCM(-2)
+	time.Sleep(1)
+	sys.KillCM(-1) // CM-2 is left, should take over during next write
+	expectedData = "WRITE FOUR"
+	sys.NodeWrite(4, 0, expectedData)
+	log.Printf("---TESTING IF DATA IS CONSISTENT---")
+	data, consistent = testDataConsistent(sys, 0)
+	if !consistent {
+		tLog.Dump()
+		t.Fatalf("Data not consistent.")
+	}
+	if data != expectedData {
+		tLog.Dump()
+		t.Fatalf("Read from N%d for P%d returned %v, expected %v", 1, 0, data, expectedData)
+	}
+
+	sys.RebootCM(-1) // CM-2 should still be the primary
+	time.Sleep(1)
+	sys.KillCM(-2) // CM-1 is left, should take over during the next write
+	expectedData = "WRITE FIVE"
+	sys.NodeWrite(5, 0, expectedData)
+	log.Printf("---TESTING IF DATA IS CONSISTENT---")
+	data, consistent = testDataConsistent(sys, 0)
+	if !consistent {
+		tLog.Dump()
+		t.Fatalf("Data not consistent.")
+	}
+	if data != expectedData {
+		tLog.Dump()
+		t.Fatalf("Read from N%d for P%d returned %v, expected %v", 1, 0, data, expectedData)
+	}
+
+	sys.RebootCM(-2)
+	time.Sleep(1)
+	sys.KillCM(-1) // CM-2 is left, should take over during next write
+	expectedData = "WRITE SIX"
+	sys.NodeWrite(6, 0, expectedData)
+	log.Printf("---TESTING IF DATA IS CONSISTENT---")
+	data, consistent = testDataConsistent(sys, 0)
+	if !consistent {
+		tLog.Dump()
+		t.Fatalf("Data not consistent.")
+	}
+	if data != expectedData {
+		tLog.Dump()
+		t.Fatalf("Read from N%d for P%d returned %v, expected %v", 1, 0, data, expectedData)
+	}
+	
 }
