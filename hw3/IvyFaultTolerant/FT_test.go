@@ -54,9 +54,9 @@ func TestSingleFaultBeforeWrite(t *testing.T) {
 	sys.Exit()
 }
 
-func TestSingleFaultAfterElection(t *testing.T) {
-	// Tests scenario where primary goes down AFTER it has been initialised as the primary
-	tLog := useTempLog(t, true)
+func TestSingleFaultAfterRequest(t *testing.T) {
+	// Tests scenario where primary goes down AFTER a request has been completed
+	tLog := useTempLog(t, false)
 
 	sys := NewSystem(10)
 	sys.Init()

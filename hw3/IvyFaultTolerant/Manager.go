@@ -202,7 +202,6 @@ func (cm *CentralManager) Listen() {
 					// Send ELECT_NO
 					cm.sendEmptyUpdateMsgToCM()
 					cm.sendElectionMsgToCM(msg.MsgId, MSG_CM_ELECT_NO)
-					// Send update
 				} else {
 					// Here, we're also a backup.
 					if cm.cmId > msg.SrcId {

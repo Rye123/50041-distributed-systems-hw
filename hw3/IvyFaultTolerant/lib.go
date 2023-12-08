@@ -179,4 +179,4 @@ const (
 )
 
 
-const TIMEOUT_INTV = time.Second * 1
+const TIMEOUT_INTV = time.Millisecond * 1000 
