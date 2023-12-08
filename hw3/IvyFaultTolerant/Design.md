@@ -17,9 +17,9 @@ The central managers operate in a **primary-backup model**. For fault tolerance,
 		- We need to know if a request is still in progress (and we need both CMs to be aware of this), to ensure that requests are handled one-by-one.
 	- When sending a write request `WQ`, the host expects a page to eventually be sent from the owner node (a `WP` message). Otherwise, it assumes that the primary CM went down, and didn't send the WF to the owner (and didn't send the invalidations).  
 	- When sending a write confirm `WC` to confirm reception of the page, the host now expects an acknowledgement `WC_ACK` from the primary CM. Otherwise, it assumes the primary CM went down, and does not know that the write request has been completed.
-- The election algorithm is a modified Bully algorithm, where in our case the coordinator (the primary CM) ==does not relinquish control== if it is already the primary.
+- The election algorithm is a modified Bully algorithm, where in our case the coordinator (the primary CM) **does not relinquish control** if it is already the primary.
 	- Elections are initialised by a CM receiving an `ELECTION_START` message from a host -- this indicates that the host cannot reach the primary CM and wants the CMs to decide among themselves on who the primary should be.
-	- Upon receiving this message, the CM only starts a full election if it itself is a backup. ==If the CM is a primary, it asserts its own victory by broadcasting an `ELECTION_WIN` message==.
+	- Upon receiving this message, the CM only starts a full election if it itself is a backup. **If the CM is a primary, it asserts its own victory by broadcasting an `ELECTION_WIN` message**.
 	- If the CM is a backup, it sends an `ELECT_ME` self-election message to the other CM. This is simultaneously a check to see if the primary CM is alive, and a check to see if the other CM is the primary or has a higher ID.
 	- Upon receiving an `ELECT_ME` message from the other CM:
 		- If the receiver is a primary, it rejects the self-election with an `ELECT_NO` message.
