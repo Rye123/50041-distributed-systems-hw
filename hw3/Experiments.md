@@ -31,7 +31,7 @@ We have the following observations:
 	- This can be heavily attributed to the timeouts needed to determine a primary. Let the default timeout of the system be $T$. 
 		 - At the start, with no primary, we first need a client to trigger an election (and hence the client needs to wait for $1 T$). 
 		 - Then, both CMs need to wait for an `ELECT_NO` from the other. The winner of the election receives no `ELECT_NO`, but must first wait for $1 T$ before it can conclude that it has won the election.
-	- Further, since `IvyFaultTolerant` relies on retransmission of requests, if it is currently handling a request, ==it will drop new requests==. Clients end up having to retransmit after waiting for the timeout period. Hence, a lot of the performance difference ends up being because of nodes waiting for timeouts, as indicated by the major difference when the timeout period is changed.
+	- Further, since `IvyFaultTolerant` relies on retransmission of requests, if it is currently handling a request, **it will drop new requests**. Clients end up having to retransmit after waiting for the timeout period. Hence, a lot of the performance difference ends up being because of nodes waiting for timeouts, as indicated by the major difference when the timeout period is changed.
 - Even after reducing timeouts to 10 milliseconds, we observe that there is still a distinctly poorer performance by `IvyFaultTolerant`.
 	- This can be attributed to the additional messages that need to be sent by the primary to the backup as updates. 
 	- Every RQ or WQ triggers a RQ_RECV or WQ_RECV message to be sent to the backup.
