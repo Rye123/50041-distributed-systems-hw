@@ -1,5 +1,7 @@
 # Design
 
+(This file uses Mermaid diagrams. For marking purposes, you can either copy and paste the Mermaid code [here](https://mermaid.live/edit), or [view this file on Github](https://github.com/Rye123/50041-distributed-systems-hw/blob/main/hw3/IvyFaultTolerant/Design.md).)
+
 We have the following assumptions:
 1. We assume that during a crash, all data on a CM is lost. This necessitates that at least one CM is alive at a time in our system. 
 2. We use an assumption similar to that used for the Bully Algorithm. Messages must be delivered and responded to within a bounded time. If a CM is alive, it is **guaranteed** to receive a given message and respond within a given time, otherwise it is guaranteed to be a dead CM.
